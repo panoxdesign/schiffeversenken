@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>AudioUI Testseite</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b0705}
+#bg{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 30%,#f2a65a 0%,#a8553a 22%,#3b2a4a 50%,#10192b 75%,#05080f 100%)}
+#bg:after{content:"";position:absolute;left:0;right:0;bottom:0;height:46%;background:linear-gradient(#1c4a63,#0b2233 60%,#06121c)}
+#ui-root{position:fixed;inset:0;pointer-events:none}
+#dbg{position:fixed;right:6px;bottom:6px;z-index:99999;display:flex;flex-wrap:wrap;gap:3px;max-width:60vw;pointer-events:auto;font:11px monospace}
+#dbg button{font:11px monospace;padding:2px 5px}
+</style></head>
+<body><div id="bg"></div><div id="ui-root"></div><div id="dbg"></div>
+<script type="module" src="./audioui.js"></script></body></html>
