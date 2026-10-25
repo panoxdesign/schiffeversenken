@@ -8,7 +8,8 @@ export function createLabelAtlas(colLabels, rowLabels) {
   cv.height = S * 4;
   const ctx = cv.getContext('2d');
   const all = [...rowLabels, ...colLabels];
-  all.forEach((txt, k) => {
+  const FONT = "'IM Fell English', Georgia, 'Palatino Linotype', 'Times New Roman', serif";
+  const draw = () => all.forEach((txt, k) => {
     const cx = (k % 5) * S + S / 2;
     const cy = Math.floor(k / 5) * S + S / 2;
     // Messingring
@@ -42,11 +43,19 @@ export function createLabelAtlas(colLabels, rowLabels) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const fs = txt.length > 1 ? 44 : 56;
-    ctx.font = `bold ${fs}px Georgia, 'Palatino Linotype', 'Times New Roman', serif`;
+    ctx.font = `${fs}px ${FONT}`;
     ctx.fillText(txt, cx, cy + 3);
   });
+  draw();
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
+  // Webfont ggf. noch nicht geladen: danach neu zeichnen
+  document.fonts?.load(`56px 'IM Fell English'`).then((f) => {
+    if (!f.length) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    draw();
+    tex.needsUpdate = true;
+  }).catch(() => {});
   return tex;
 }

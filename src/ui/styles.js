@@ -2,7 +2,7 @@
 export const CSS = `
 .fb{--ink:#2b1b0e;--parch1:#f6e8c2;--parch2:#e3c88f;--parch3:#b9955c;--wood1:#5a3820;--wood2:#37200f;--wood3:#1c1009;
 --brass1:#fbe7a0;--brass2:#dcab4a;--brass3:#8a5f1f;--red:#b3331f;--sea:#4a9bbd;--cream:#f7e9c6;
---serif:'Palatino Linotype','Book Antiqua',Palatino,Georgia,'Times New Roman',serif;
+--serif:'IM Fell English','Palatino Linotype','Book Antiqua',Palatino,Georgia,'Times New Roman',serif;
 position:absolute;inset:0;overflow:hidden;font-family:var(--serif);color:var(--cream);pointer-events:none;
 -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
 .fb *{box-sizing:border-box}
@@ -52,7 +52,7 @@ box-shadow:inset 0 1px 0 rgba(255,220,150,.3),inset 0 0 0 3px rgba(0,0,0,.25),0 
 background:radial-gradient(ellipse at 50% 40%,#3b2414 0%,#1d1009 60%,#0b0604 100%)}
 .fb-load.out{opacity:0}
 .fb-load .wheel{width:min(34vmin,230px);height:min(34vmin,230px);animation:fb-spin 14s linear infinite;filter:drop-shadow(0 8px 14px rgba(0,0,0,.7))}
-.fb-load .cap{font-size:clamp(28px,6vmin,46px);font-weight:900;letter-spacing:.14em;text-transform:uppercase}
+.fb-load .cap{font-family:'Pirata One',var(--serif);font-size:clamp(34px,7.5vmin,58px);line-height:1.05;font-weight:400;letter-spacing:.02em}
 .fb-load .msg{font-size:clamp(14px,2.4vmin,18px);font-style:italic;color:#d9bf88;min-height:1.4em}
 .fb-load .rope{position:relative;width:min(78vw,420px);height:16px;border-radius:9px;background:#120a05;border:2px solid #6b4510;box-shadow:inset 0 2px 5px #000,0 0 0 2px rgba(0,0,0,.4);overflow:hidden}
 .fb-load .rope i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(0);transition:transform .35s ease-out;
@@ -67,7 +67,7 @@ background:repeating-linear-gradient(115deg,#d8b87a 0 6px,#8c6a3a 6px 11px)}
 background:radial-gradient(ellipse at 50% 46%,rgba(10,6,3,.12) 0%,rgba(10,6,3,.55) 62%,rgba(6,3,2,.82) 100%)}
 .fb-menu .logo{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px}
 .fb-menu .emb{width:clamp(56px,11vh,96px);height:clamp(56px,11vh,96px);filter:drop-shadow(0 6px 8px rgba(0,0,0,.7))}
-.fb-menu .title{font-size:clamp(46px,min(13.5vw,15vh),124px);line-height:1;font-weight:900;letter-spacing:.07em;text-transform:uppercase;padding:0 .08em}
+.fb-menu .title{font-family:'Pirata One',var(--serif);font-size:clamp(52px,min(15vw,17vh),140px);line-height:1.05;font-weight:400;letter-spacing:.02em;padding:0 .08em}
 .fb-menu .sub{display:flex;align-items:center;gap:14px;font-size:clamp(13px,2.5vh,22px);letter-spacing:.42em;text-transform:uppercase;color:#f1d58e;text-shadow:0 2px 6px #000,0 0 14px rgba(0,0,0,.8);padding-left:.42em}
 .fb-menu .sub::before,.fb-menu .sub::after{content:"";width:clamp(28px,8vw,90px);height:2px;background:linear-gradient(90deg,transparent,#e4b857,transparent)}
 .fb-menu .scroll{width:min(94vw,500px);padding:26px 22px 18px;display:flex;flex-direction:column;gap:clamp(10px,1.8vh,16px);align-items:stretch;pointer-events:auto;margin-top:6px}
