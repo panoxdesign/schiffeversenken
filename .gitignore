@@ -1,0 +1,31 @@
+# Abhängigkeiten
+node_modules/
+
+# Build-Ausgabe
+dist/
+dist-ssr/
+*.local
+
+# Vite-Cache
+.vite/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Umgebungsvariablen
+.env
+.env.*
+!.env.example
+
+# Editor / Betriebssystem
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Claude Code (lokale Einstellungen)
+.claude/settings.local.json
