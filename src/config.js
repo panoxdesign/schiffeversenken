@@ -1,11 +1,13 @@
 // Zentrale Spielkonfiguration – gemeinsame Konstanten für alle Module.
 // Änderungen hier nur durch den Integrator (siehe ARCHITECTURE.md).
 import * as THREE from 'three';
+import { BOARD_SIZE } from '../shared/rules.js';
+
+// Regeln liegen im Shared-Bereich (auch vom Server genutzt) und werden hier unverändert weitergereicht.
+export { BOARD_SIZE, FLEET, RULES } from '../shared/rules.js';
 
 /** Kantenlänge einer Spielfeldzelle in Welteinheiten. */
 export const CELL = 2;
-/** Spielfeld ist BOARD_SIZE x BOARD_SIZE Zellen. */
-export const BOARD_SIZE = 10;
 /** Halbe Brettbreite in Welteinheiten. */
 export const BOARD_HALF = (CELL * BOARD_SIZE) / 2;
 
@@ -24,22 +26,6 @@ export const FLAGSHIP_POSITION = {
 /** Spaltenbeschriftung (x-Richtung) und Zeilenbeschriftung (z-Richtung). */
 export const COL_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
 export const ROW_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
-
-/** Flotte: Reihenfolge = Reihenfolge im Platzierungsmenü. */
-export const FLEET = [
-  { id: 'galeone', name: 'Galeone', length: 5 },
-  { id: 'fregatte', name: 'Fregatte', length: 4 },
-  { id: 'brigg', name: 'Brigg', length: 3 },
-  { id: 'schoner', name: 'Schoner', length: 3 },
-  { id: 'schaluppe', name: 'Schaluppe', length: 2 },
-];
-
-export const RULES = {
-  /** Klassische deutsche Regel: Schiffe dürfen sich nicht berühren (auch nicht diagonal). */
-  noTouching: true,
-  /** Bei Treffer darf erneut geschossen werden. */
-  shootAgainOnHit: true,
-};
 
 export const DIFFICULTIES = {
   easy: { name: 'Leichtmatrose' },

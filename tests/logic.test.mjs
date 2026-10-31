@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Board } from '../src/game/Board.js';
+import { Board } from '../shared/Board.js';
 import { AI } from '../src/game/AI.js';
 import { FLEET, RULES, BOARD_SIZE } from '../src/config.js';
 

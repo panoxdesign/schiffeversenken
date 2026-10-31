@@ -112,6 +112,32 @@ export class Board {
     return this.ships.filter(Boolean).length === n;
   }
 
+  /**
+   * Ergänzt fehlende Schiffe zufällig; bereits gesetzte bleiben unverändert (Platzierungs-Timeout).
+   * @returns {boolean} false, wenn die gesetzten Schiffe keinen Platz mehr lassen.
+   */
+  completeRandom(lengths, rng = Math.random) {
+    const missing = lengths.map((l, i) => i).filter((i) => !this.isPlaced(i)).sort((a, b) => lengths[b] - lengths[a]);
+    if (!missing.length) return true;
+    for (let attempt = 0; attempt < 300; attempt++) {
+      for (const idx of missing) this.remove(idx);
+      if (missing.every((idx) => this._placeRandom(idx, lengths[idx], rng, 60))) return true;
+    }
+    // Fallback: systematisch alle Positionen ab zufälligem Start
+    for (const idx of missing) this.remove(idx);
+    const n = this.size * this.size;
+    const startOffset = Math.floor(rng() * n);
+    for (const idx of missing) {
+      let placed = false;
+      for (let k = 0; k < n * 2 && !placed; k++) {
+        const p = (k + startOffset) % n;
+        placed = this.place(idx, lengths[idx], p % this.size, Math.floor(p / this.size), k < n ? 'h' : 'v');
+      }
+      if (!placed) return false;
+    }
+    return true;
+  }
+
   _placeRandom(index, length, rng, tries) {
     for (let t = 0; t < tries; t++) {
       const o = rng() < 0.5 ? 'h' : 'v';
@@ -144,6 +170,29 @@ export class Board {
     }
     return { result: 'hit', shipIndex: si, cellIndex, cells: [] };
   }
+
+  // --- Wissens-Brett: gegnerisches Brett, von dem nur Schussergebnisse bekannt sind.
+
+  /** Schussergebnis eintragen, ohne die Schiffe zu kennen. */
+  recordShot(col, row, hit) {
+    if (this.inBounds(col, row)) this.shots[row * this.size + col] = hit ? 2 : 1;
+  }
+
+  /** Bekannt gewordenes, versenktes Schiff eintragen. */
+  recordSunk(index, length, col, row, orientation) {
+    this.remove(index);
+    const cells = [];
+    for (let i = 0; i < length; i++) {
+      const c = orientation === 'h' ? col + i : col;
+      const r = orientation === 'h' ? row : row + i;
+      cells.push({ col: c, row: r });
+      this.grid[r * this.size + c] = index;
+      this.shots[r * this.size + c] = 2;
+    }
+    this.ships[index] = { index, length, col, row, orientation, cells, hits: length, sunk: true };
+  }
+
+  sunkCount() { return this.ships.filter((s) => s && s.sunk).length; }
 
   wasShot(col, row) { return this.inBounds(col, row) && this.shots[row * this.size + col] !== 0; }
 

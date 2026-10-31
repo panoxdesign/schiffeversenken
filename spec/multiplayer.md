@@ -293,7 +293,7 @@ Jede Etappe ist für sich lauffähig, wird committet und lässt das Spiel nie ka
 
 Fortschritt hier abhaken:
 
-- [ ] Etappe 1 – Umbau
+- [x] Etappe 1 – Umbau
 - [ ] Etappe 2 – Hot-Seat
 - [ ] Etappe 3 – Server-Kern
 - [ ] Etappe 4 – Online mit Freunden

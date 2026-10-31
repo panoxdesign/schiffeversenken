@@ -1,5 +1,5 @@
 // Gegner-KI (reine Logik, kein three.js).
-import { neighborCells } from './Board.js';
+import { neighborCells } from '../../shared/Board.js';
 
 const UNKNOWN = 0, MISS = 1, HIT = 2, SUNK = 3, BLOCKED = 4;
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];

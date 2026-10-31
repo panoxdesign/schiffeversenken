@@ -38,6 +38,6 @@ URL-Parameter:
 | `src/ui` | HTML/CSS-Oberfläche (Menüs, HUD, Banner) |
 | `src/game` | Spielregeln, KI, Eingabe, Spielablauf |
 | `dev/` | Testseiten der einzelnen Module (z. B. `/dev/ships.html`) |
-| `tests/` | Logik-Tests: `node --test` |
+| `tests/` | Logik- und Controller-Tests: `npm test` |
 
 Schnittstellen und Performance-Budget stehen in `ARCHITECTURE.md`.

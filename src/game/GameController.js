@@ -1,8 +1,9 @@
 // Spielablauf: MENU -> PLACEMENT -> BATTLE -> GAMEOVER. Inszenierung gegen die Modul-Verträge (ARCHITECTURE.md).
 import * as THREE from 'three';
 import { FLEET, RULES, BOARD_SIZE, COL_LABELS, ROW_LABELS, FLAGSHIP_POSITION, BOARD_CENTER } from '../config.js';
-import { Board } from './Board.js';
-import { AI } from './AI.js';
+import { Board } from '../../shared/Board.js';
+import { fleetOf } from '../../shared/protocol.js';
+import { AIOpponent } from './opponents/AIOpponent.js';
 import { Input } from './Input.js';
 
 const CANCEL = { cancelled: true };
@@ -35,10 +36,11 @@ export class GameController {
     this._lastPauseToggle = 0;
     this._timeScale = 1; // nur für Debug/Tests
 
+    // enemy ist ein Wissens-Brett: nur Schussergebnisse und versenkte Schiffe, die Flotte kennt der Gegner.
     this.logic = { player: this._newBoard(), enemy: this._newBoard() };
     this.ships = { player: [], enemy: [] };
     this.flagships = { player: null, enemy: null };
-    this.ai = null;
+    this.opponent = null;
     this.stats = this._newStats();
     this._view = null;
     this._pending = null; // wartet auf Spieler-Schuss
@@ -275,8 +277,10 @@ export class GameController {
     await this._cp(token);
   }
 
+  _sleep(sec) { return new Promise((r) => setTimeout(r, sec * 1000 * this._timeScale)); }
+
   async _wait(sec, token) {
-    await new Promise((r) => setTimeout(r, sec * 1000 * this._timeScale));
+    await this._sleep(sec);
     await this._cp(token);
   }
 
@@ -322,7 +326,8 @@ export class GameController {
     call(fx, 'clearAll');
     for (const m of ['hideMainMenu', 'hidePlacement', 'hideHUD', 'hideGameOver', 'hidePause']) call(ui, m);
     call(ui, 'setCoordinate', null);
-    this.ai = null;
+    call(this.opponent, 'dispose');
+    this.opponent = null;
     this.stats = this._newStats();
   }
 
@@ -335,24 +340,15 @@ export class GameController {
   }
 
   _startBattle() {
-    const { ui, world, audio, boards, shipFactory } = this.ctx;
+    const { ui, world, audio, boards } = this.ctx;
     const token = this._token;
     this.state = 'battle';
     call(ui, 'hidePlacement');
     call(boards.player, 'hideGhost');
     this.input.setBoard(null);
 
-    // Gegnerflotte
-    this.logic.enemy.randomize(LENGTHS, this.rng);
-    for (let i = 0; i < FLEET.length; i++) {
-      const s = this.logic.enemy.ships[i];
-      const ship = call(shipFactory, 'createShip', LENGTHS[i], 'enemy');
-      this.ships.enemy[i] = ship;
-      call(ship, 'place', boards.enemy, s.col, s.row, s.orientation);
-      call(ship, 'setVisible', false);
-    }
     this._ensureFlagships();
-    this.ai = new AI(this.difficulty, this.rng, { fleet: LENGTHS, size: BOARD_SIZE, noTouching: RULES.noTouching });
+    this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
     this.stats = this._newStats();
     this.stats.startedAt = performance.now();
 
@@ -364,13 +360,23 @@ export class GameController {
   }
 
   async _battleLoop(token) {
-    let errors = 0;
+    let errors = 0, first;
+    try {
+      ({ first } = await this.opponent.submitFleet(fleetOf(this.logic.player)));
+      await this._cp(token);
+    } catch (e) {
+      if (e !== CANCEL) { console.error('[game] Flotte konnte nicht übergeben werden', e); this.start(); }
+      return;
+    }
     while (token === this._token) {
       try {
-        await this._camTo('enemy', 1.4, token);
+        await this._camTo(first === 'player' ? 'enemy' : 'player', 1.4, token);
         for (;;) {
-          const w = await this._playerTurn(token);
-          if (w === 'won') { await this._gameOver(true, token); return; }
+          if (first === 'player') {
+            const w = await this._playerTurn(token);
+            if (w === 'won') { await this._gameOver(true, token); return; }
+          }
+          first = 'player';
           const l = await this._enemyTurn(token);
           if (l === 'lost') { await this._gameOver(false, token); return; }
         }
@@ -406,7 +412,7 @@ export class GameController {
       const res = await this._shoot('player', cell.col, cell.row, token);
       if (res.result === 'repeat') continue;
       this._updateUI('player');
-      if (this.logic.enemy.allSunk()) return 'won';
+      if (this._fleetSunk('enemy')) return 'won';
       if (res.result === 'miss' || !RULES.shootAgainOnHit) return 'continue';
     }
   }
@@ -417,33 +423,42 @@ export class GameController {
     call(boards.enemy, 'setActive', false);
     call(boards.player, 'setActive', true);
     call(ui, 'announce', 'Der Feind ist am Zug', 'turn');
-    const think = 0.6 + this.rng() * 0.5;
-    await Promise.all([this._camTo('player', 1.1, token), this._wait(think, token)]);
-    for (;;) {
-      let shot = this.ai.chooseShot();
-      if (!shot || this.logic.player.wasShot(shot.col, shot.row)) shot = this._anyUnshot(this.logic.player);
+    const shotP = this.opponent.nextShot();
+    await this._camTo('player', 1.1, token);
+    for (let shot = await shotP; ; shot = await this.opponent.nextShot()) {
+      await this._cp(token);
       if (!shot) return 'continue';
       const res = await this._shoot('enemy', shot.col, shot.row, token);
-      this.ai.notify(shot.col, shot.row, res.result === 'repeat' ? 'miss' : res.result, res.cells);
       this._updateUI('enemy');
-      if (this.logic.player.allSunk()) return 'lost';
-      if (res.result === 'miss' || !RULES.shootAgainOnHit) return 'continue';
-      await this._wait(0.4, token);
+      if (this._fleetSunk('player')) return 'lost';
+      if (res.result === 'miss' || res.result === 'repeat' || !RULES.shootAgainOnHit) return 'continue';
     }
   }
 
-  _anyUnshot(board) {
-    const list = [];
-    for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) if (!board.wasShot(c, r)) list.push({ col: c, row: r });
-    return list.length ? list[Math.floor(this.rng() * list.length)] : null;
+  _fleetSunk(side) { return this.logic[side].sunkCount() === FLEET.length; }
+
+  /** Gegner-Schuss auf das eigene Brett auswerten bzw. eigenen Schuss beim Gegner auflösen lassen. */
+  async _resolveShot(shooter, col, row, token) {
+    if (shooter === 'enemy') return this.logic.player.receiveShot(col, row);
+    const kb = this.logic.enemy;
+    if (kb.wasShot(col, row)) return { result: 'repeat', shipIndex: -1, cellIndex: -1, cells: [] };
+    const r = await this.opponent.shoot(col, row);
+    await this._cp(token);
+    if (r.result === 'sunk') {
+      const { index, length, col: c, row: rw, orientation } = r.ship;
+      kb.recordSunk(index, length, c, rw, orientation);
+      return { result: 'sunk', shipIndex: index, cellIndex: -1, cells: kb.ships[index].cells.map((x) => ({ ...x })) };
+    }
+    kb.recordShot(col, row, r.result === 'hit');
+    return { result: r.result, shipIndex: -1, cellIndex: -1, cells: [] };
   }
 
   /** Ein kompletter Schuss samt Inszenierung. shooter: 'player' | 'enemy'. */
   async _shoot(shooter, col, row, token) {
-    const { boards, fx, audio, cameraRig, world, ui } = this.ctx;
+    const { boards, fx, audio, cameraRig, world, ui, shipFactory } = this.ctx;
     const tSide = shooter === 'player' ? 'enemy' : 'player';
     const view = boards[tSide];
-    const res = this.logic[tSide].receiveShot(col, row);
+    const res = await this._resolveShot(shooter, col, row, token);
     if (res.result === 'repeat') return res;
     if (shooter === 'player') { this.stats.shots++; if (res.result !== 'miss') this.stats.hits++; }
 
@@ -472,7 +487,7 @@ export class GameController {
       return res;
     }
 
-    const ship = this.ships[tSide][res.shipIndex];
+    let ship = this.ships[tSide][res.shipIndex];
     call(fx, 'explosion', target, 1);
     call(audio, 'play', 'explosion', { x: target.x });
     call(cameraRig, 'shake', 0.8);
@@ -491,7 +506,11 @@ export class GameController {
     const name = FLEET[res.shipIndex].name;
     call(ui, 'announce', mine ? `${name} versenkt!` : `Unsere ${name} ist gesunken!`, 'sunk');
     await this._wait(0.5, token);
-    this._stopShipFires(tSide, res.shipIndex);
+    this._stopShipFires(tSide, res.cells);
+    if (!ship) { // Gegnerschiff wird erst beim Versenken bekannt
+      ship = this.ships[tSide][res.shipIndex] = call(shipFactory, 'createShip', info.length, tSide);
+      call(ship, 'place', view, info.col, info.row, info.orientation);
+    }
     call(ship, 'setVisible', true);
     if (tSide === 'enemy') for (let i = 0; i < info.length; i++) call(ship, 'damage', i);
     const a = view.cellToWorld(info.col, info.row, new THREE.Vector3());
@@ -502,7 +521,7 @@ export class GameController {
     call(audio, 'play', 'sink', { x: mid.x });
     if (RULES.noTouching) for (const n of this.logic[tSide].neighborsOf(res.shipIndex)) call(view, 'markBlocked', n.col, n.row);
     this._updateUI(shooter);
-    const over = this.logic[tSide].allSunk();
+    const over = this._fleetSunk(tSide);
     await this._wait(over ? 0.8 : 1.0, token);
     if (over) await this._race(sinkP, token, 4000);
     return res;
@@ -513,15 +532,15 @@ export class GameController {
     const handle = call(this.ctx.fx, 'startFire', target, 1);
     if (!handle) return;
     this._fires.push({
-      handle, side: tSide, shipIndex: this.logic[tSide].shipAt(col, row), ship: tSide === 'player' ? ship : null,
+      handle, side: tSide, col, row, ship: tSide === 'player' ? ship : null,
       idx: cellIndex, x: target.x, z: target.z,
     });
   }
 
-  _stopShipFires(side, shipIndex) {
+  _stopShipFires(side, cells) {
     for (let i = this._fires.length - 1; i >= 0; i--) {
       const f = this._fires[i];
-      if (f.side === side && f.shipIndex === shipIndex) { call(f.handle, 'stop'); this._fires.splice(i, 1); }
+      if (f.side === side && cells.some((c) => c.col === f.col && c.row === f.row)) { call(f.handle, 'stop'); this._fires.splice(i, 1); }
     }
   }
 
@@ -619,10 +638,10 @@ export class GameController {
       async autoFire(mode = 'random') {
         await this.ready();
         if (!self._pending) return null;
-        const lg = self.logic.enemy, cand = [];
+        const known = self.logic.enemy, truth = self.opponent && self.opponent.board, cand = [];
         for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) {
-          if (lg.wasShot(c, r)) continue;
-          const isShip = lg.shipAt(c, r) >= 0;
+          if (known.wasShot(c, r)) continue;
+          const isShip = truth ? truth.shipAt(c, r) >= 0 : false;
           if (mode === 'hit' ? isShip : mode === 'miss' ? !isShip : true) cand.push([c, r]);
         }
         if (!cand.length) return null;

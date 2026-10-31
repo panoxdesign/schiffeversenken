@@ -162,3 +162,23 @@ test('Input: Touch zielt erst, zweiter Tap feuert; Klick-Toleranz', async () => 
   assert.equal(seen.hover.length, n, 'Hover nur bei Zellwechsel');
   gc.input.dispose();
 });
+
+test('Gegner-Abstraktion: Controller kennt nur versenkte Gegnerschiffe', async () => {
+  const { ctx } = makeCtx();
+  const gc = new GameController(ctx);
+  gc.debug.setTimeScale(0);
+  gc.debug.quickStart('normal');
+  await gc.debug.ready();
+  assert.equal(gc.logic.enemy.ships.filter(Boolean).length, 0, 'Gegnerflotte verdeckt');
+  assert.equal(gc.ships.enemy.filter(Boolean).length, 0, 'keine Gegnerschiffe in der Szene');
+  const truth = gc.opponent.board;
+  const target = truth.ships[4]; // Schaluppe (2 Felder)
+  for (const c of target.cells) {
+    await gc.debug.ready();
+    assert.ok(gc.debug.fire(c.col, c.row));
+  }
+  await until(() => gc.logic.enemy.sunkCount() === 1);
+  assert.deepEqual(gc.logic.enemy.ships[4].cells, target.cells);
+  assert.equal(gc.ships.enemy.filter(Boolean).length, 1, 'versenktes Schiff erscheint');
+  assert.equal(gc.logic.enemy.ships.filter(Boolean).length, 1);
+});
