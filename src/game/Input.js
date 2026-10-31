@@ -150,6 +150,7 @@ export class Input {
   }
 
   _onKey(e) {
+    if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'text') return; // Namensfelder: normal tippen
     if (e.repeat && e.code !== 'KeyR' && e.code !== 'Space') return;
     if (e.code === 'KeyR' || e.code === 'Space') {
       if (e.code === 'Space') e.preventDefault();

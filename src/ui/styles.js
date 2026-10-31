@@ -88,6 +88,28 @@ background:radial-gradient(circle at 35% 30%,#ff8a70,#b3231a 70%);box-shadow:0 2
 .fb-menu .row .btn{flex:1 1 140px;font-size:16px}
 .fb-menu .go{align-self:center;width:100%}
 .fb-menu .ver{position:absolute;bottom:6px;right:10px;font-size:11px;color:rgba(240,220,170,.5)}
+.fb-menu .page{display:flex;flex-direction:column;gap:clamp(10px,1.8vh,16px);align-items:stretch}
+.fb-menu .page[hidden]{display:none}
+.fb-menu .nm-lbl{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#6b3f12;font-weight:800;margin-bottom:-8px}
+.fb-menu .nm-row{display:flex;gap:8px;align-items:center}
+.fb-menu .nm-in{flex:1;min-width:0;height:44px;padding:0 12px;border-radius:8px;border:2px solid #6b4a22;background:rgba(255,250,232,.85);
+color:var(--ink);font:700 19px var(--serif);pointer-events:auto}
+.fb-menu .nm-in:focus{outline:none;border-color:#8a5200;box-shadow:0 0 0 3px rgba(220,171,74,.5)}
+.fb-menu .nm-row .ibtn{width:44px;height:44px;min-height:44px;font-size:26px;flex:none}
+.fb-menu .modes{display:flex;flex-direction:column;gap:8px}
+.fb-menu .mode{justify-content:flex-start;min-height:52px;font-size:19px;flex-wrap:wrap;column-gap:.6em;text-align:left}
+.fb-menu .mode .ic{font-size:28px;flex:none}
+.fb-menu .mode small{flex-basis:100%;font-size:12px;font-style:italic;font-weight:400;margin:-6px 0 6px 46px}
+.fb-menu .mode:disabled{opacity:.55;cursor:not-allowed}
+
+/* ---------- Sichtschutz (Hot-Seat) ---------- */
+.fb-curtain{z-index:65;align-items:center;justify-content:center;padding:12px;pointer-events:auto;
+background:radial-gradient(ellipse at 50% 40%,#2a1709 0%,#120904 70%,#080402 100%)}
+.fb-curtain .pnl{width:min(94vw,500px);padding:24px;display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
+.fb-curtain .art{width:84px;height:84px;font-size:84px;color:#6b4510}
+.fb-curtain h2{font-size:clamp(24px,4.6vh,34px);line-height:1.15;font-weight:900;color:#5a3010;overflow-wrap:anywhere}
+.fb-curtain .sb{font-style:italic;color:#5a4128;font-size:15px}
+.fb-curtain .btn{width:100%;overflow-wrap:anywhere}
 
 /* ---------- Modale (Einstellungen, Anleitung, Pause) ---------- */
 .fb-modal{z-index:60;align-items:center;justify-content:center;padding:12px;background:rgba(8,4,2,.72);pointer-events:auto}
@@ -227,6 +249,13 @@ clip-path:polygon(0 0,100% 0,calc(100% - 22px) 50%,100% 100%,0 100%,22px 50%);ba
 .fb-over .grid div{padding:7px 4px;border-radius:8px;background:rgba(60,34,12,.12);border:1px solid rgba(110,74,31,.4)}
 .fb-over .grid span{display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#6b4a22}
 .fb-over .grid b{display:block;font-size:24px;color:#2b1608;font-variant-numeric:tabular-nums}
+.fb-over .grid.one{grid-template-columns:1fr;width:auto;min-width:140px}
+.fb-over .duel{width:100%;border-collapse:separate;border-spacing:6px 4px;font-variant-numeric:tabular-nums}
+.fb-over .duel th{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#6b4a22;text-align:left;font-weight:700}
+.fb-over .duel thead th{font-size:16px;letter-spacing:0;text-transform:none;color:#2b1608;text-align:center;overflow-wrap:anywhere}
+.fb-over .duel thead th.win{color:#7a4a00}
+.fb-over .duel thead .ic{width:16px;height:16px;margin-right:4px;vertical-align:-2px}
+.fb-over .duel td{text-align:center;font-size:22px;font-weight:700;color:#2b1608;padding:4px;border-radius:7px;background:rgba(60,34,12,.12);border:1px solid rgba(110,74,31,.4)}
 .fb-over .btns{display:flex;gap:10px;width:100%;flex-wrap:wrap}
 .fb-over .btns .btn{flex:1 1 150px}
 .fb-over .coin{position:absolute;top:-30px;width:26px;height:26px;opacity:0;pointer-events:none;animation:fb-fall 2.8s ease-in 1 both;will-change:transform,opacity}

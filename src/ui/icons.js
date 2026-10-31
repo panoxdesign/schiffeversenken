@@ -69,4 +69,13 @@ export const chest = (cls = '') => svg('0 0 140 120', `
 <g fill="#fff6c0" opacity=".9"><path d="M30 30l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/><path d="M112 24l1.5 4 4 1.5-4 1.5-1.5 4-1.5-4-4-1.5 4-1.5z"/></g>`, cls);
 
 export const coin = (cls = '') => svg('0 0 40 40', `<circle cx="20" cy="20" r="17" fill="url(#fb-brass)" stroke="#6b4510" stroke-width="2.5"/><circle cx="20" cy="20" r="11.5" fill="none" stroke="#8a5f1f" stroke-width="1.6"/><path d="M20 12v16M15 17c0-3 10-3 10 0s-10 3-10 6 10 3 10 0" fill="none" stroke="#8a5f1f" stroke-width="2" stroke-linecap="round"/>`, cls);
+/** Zwei Figuren (Hot-Seat). */
+export const people = (cls = '') => svg('0 0 100 100', `<g fill="currentColor"><circle cx="34" cy="30" r="13"/><path d="M10 84c0-18 10-30 24-30s24 12 24 30z"/>
+<circle cx="68" cy="34" r="11" opacity=".8"/><path d="M50 84c1-6 2-11 5-16 3-6 8-10 13-10 12 0 22 11 22 26z" opacity=".8"/></g>`, cls);
+/** Globus (Online). */
+export const globe = (cls = '') => svg('0 0 100 100', `<g fill="none" stroke="currentColor" stroke-width="6"><circle cx="50" cy="50" r="38"/><ellipse cx="50" cy="50" rx="16" ry="38"/>
+<path d="M14 38h72M14 62h72"/></g>`, cls);
+/** Flagge (Aufgeben). */
+export const flag = (cls = '') => svg('0 0 100 100', `<g stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="10" x2="22" y2="92"/>
+<path d="M22 14c16-8 28 8 44 0s14-4 18-6v40c-4 2-6 0-18 6s-28-8-44 0z" fill="currentColor" fill-opacity=".35"/></g>`, cls);
 export const swords = sabre;

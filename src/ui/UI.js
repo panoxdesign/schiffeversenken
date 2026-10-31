@@ -1,7 +1,9 @@
-// HTML/CSS-Overlay: Laden, Hauptmenü, Platzierung, HUD, Banner, Game Over, Pause, Einstellungen.
+// HTML/CSS-Overlay: Laden, Hauptmenü, Platzierung, HUD, Banner, Sichtschutz, Game Over, Pause, Einstellungen.
 import { CSS } from './styles.js';
 import * as I from './icons.js';
 import { DIFFICULTIES, FLEET, QUALITY_PRESETS } from '../config.js';
+import { MAX_NAME_LENGTH, sanitizeName } from '../../shared/protocol.js';
+import { randomPirateName } from '../../shared/names.js';
 
 const DIFF_ICON = { easy: 'boat', normal: 'anchor', hard: 'skull' };
 const DIFF_TXT = { easy: 'Der Gegner schießt wild drauflos', normal: 'Ein erfahrener Seebär jagt Treffer', hard: 'Der Teufel kennt jede Schwäche' };
@@ -29,6 +31,8 @@ export class UI {
 
     this._difficulty = lsGet('freibeuter.difficulty', 'normal');
     if (!DIFFICULTIES[this._difficulty]) this._difficulty = 'normal';
+    this.playerName = sanitizeName(lsGet('freibeuter.name', '')) || randomPirateName();
+    lsSet('freibeuter.name', this.playerName);
 
     this._bindGlobal();
     this._buildBanner();
@@ -75,7 +79,7 @@ export class UI {
       if (this._isOpen(this._settings)) return this.hideSettings();
       if (this._isOpen(this._help)) return this.hideHelp();
       if (this._isOpen(this._pause)) { if (this._cb.pause && this._cb.pause.onResume) this._cb.pause.onResume(); return; }
-      if (this._isOpen(this._menu) || this._isOpen(this._over) || (this._load && !this._load.hidden)) return;
+      if (this._isOpen(this._menu) || this._isOpen(this._over) || this._isOpen(this._curtain) || (this._load && !this._load.hidden)) return;
       if (this.onPauseRequested) this.onPauseRequested();
     });
   }
@@ -113,26 +117,70 @@ export class UI {
   }
 
   /* ------------------------------------------------------------------ Hauptmenü */
-  showMainMenu({ onStart } = {}) {
-    this._cb.start = onStart;
+  /** onStart(difficulty): gegen die KI; onHotseat([name1, name2]): zu zweit an einem Gerät. */
+  showMainMenu({ onStart, onHotseat } = {}) {
+    this._cb.start = onStart; this._cb.hotseat = onHotseat;
     if (!this._menu) {
       const n = this._menu = this._screen('fb-menu');
       const diffs = Object.entries(DIFFICULTIES).map(([k, d]) =>
         `<button class="diff" role="radio" data-k="${k}" aria-checked="false">${I[DIFF_ICON[k]] ? I[DIFF_ICON[k]]() : ''}<span>${esc(d.name)}</span><small>${esc(DIFF_TXT[k] || '')}</small></button>`).join('');
+      const nameField = (key, aria) => `<div class="nm-row"><input class="nm-in" data-n="${key}" type="text" maxlength="${MAX_NAME_LENGTH}" autocomplete="off" spellcheck="false" aria-label="${aria}">
+        <button class="btn ibtn" data-dice="${key}" aria-label="Neuen Namen würfeln">${I.dice()}</button></div>`;
       n.innerHTML = `<div class="logo"><div class="emb">${I.skull()}</div><h1 class="title gold" style="margin:0">Freibeuter</h1><div class="sub">Schiffe versenken</div></div>
-        <div class="scroll parch"><h3>Wähle deinen Gegner</h3><div class="diffs" role="radiogroup" aria-label="Schwierigkeit">${diffs}</div>
-        <button class="btn primary go" data-focus>${I.sabre()}In See stechen</button>
-        <div class="row"><button class="btn ghost" data-act="settings">${I.cog()}Einstellungen</button><button class="btn ghost" data-act="help">${I.book()}Anleitung</button></div></div>`;
+        <div class="scroll parch">
+        <div class="page" data-page="main"><label class="nm-lbl">Dein Piratenname</label>${nameField('me', 'Dein Piratenname')}
+          <div class="modes"><button class="btn mode" data-go="ai" data-focus>${I.skull()}<span>Gegen die KI</span></button>
+          <button class="btn mode" data-go="hotseat">${I.people()}<span>Zu zweit an einem Gerät</span></button>
+          <button class="btn mode" disabled title="Kommt bald">${I.globe()}<span>Online</span><small>Der Hafen wird noch gebaut</small></button></div>
+          <div class="row"><button class="btn ghost" data-act="settings">${I.cog()}Einstellungen</button><button class="btn ghost" data-act="help">${I.book()}Anleitung</button></div></div>
+        <div class="page" data-page="ai" hidden><h3>Wähle deinen Gegner</h3><div class="diffs" role="radiogroup" aria-label="Schwierigkeit">${diffs}</div>
+          <button class="btn primary go" data-focus>${I.sabre()}In See stechen</button><button class="btn ghost back">Zurück</button></div>
+        <div class="page" data-page="hotseat" hidden><h3>Zwei Käpt'ns, ein Gerät</h3>
+          <label class="nm-lbl">Spieler 1 (linkes Meer)</label>${nameField('p1', 'Name Spieler 1')}
+          <label class="nm-lbl">Spieler 2 (rechtes Meer)</label>${nameField('p2', 'Name Spieler 2')}
+          <button class="btn primary hs-go" data-focus>${I.sabre()}Leinen los!</button><button class="btn ghost back">Zurück</button></div></div>`;
+      this._mn = { pages: [...n.querySelectorAll('.page')], inputs: {} };
+      n.querySelectorAll('.nm-in').forEach((inp) => { this._mn.inputs[inp.dataset.n] = inp; });
+      const me = this._mn.inputs.me;
+      me.value = this.playerName;
+      me.addEventListener('change', () => this._setPlayerName(me.value));
+      n.addEventListener('click', (e) => {
+        const d = e.target.closest('[data-dice]');
+        if (d) { const inp = this._mn.inputs[d.dataset.dice]; inp.value = randomPirateName(); if (d.dataset.dice === 'me') this._setPlayerName(inp.value); }
+      });
+      n.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => this._menuPage(b.dataset.go)));
+      n.querySelectorAll('.back').forEach((b) => b.addEventListener('click', () => this._menuPage('main')));
       n.querySelector('.diffs').addEventListener('click', (e) => { const b = e.target.closest('.diff'); if (b) this._setDifficulty(b.dataset.k); });
       n.querySelector('.go').addEventListener('click', () => { this._snd('bell', { volume: 0.5 }); this._cb.start && this._cb.start(this._difficulty); });
+      n.querySelector('.hs-go').addEventListener('click', () => {
+        const { p1, p2 } = this._mn.inputs;
+        const names = [p1, p2].map((inp) => { const v = sanitizeName(inp.value) || randomPirateName(); inp.value = v; return v; });
+        this._snd('bell', { volume: 0.5 }); this._cb.hotseat && this._cb.hotseat(names);
+      });
       n.querySelector('[data-act=settings]').addEventListener('click', () => this.showSettings());
       n.querySelector('[data-act=help]').addEventListener('click', () => this.showHelp());
       this._setDifficulty(this._difficulty, true);
     }
+    this._menuPage('main', true);
     this._show(this._menu); this._focus(this._menu);
     if (this.audio) this.audio.playMusic('menu');
   }
   hideMainMenu() { if (this._menu) this._hide(this._menu); }
+  _menuPage(page, silent) {
+    const m = this._mn;
+    if (page === 'hotseat') {
+      const { p1, p2 } = m.inputs;
+      if (!p1.value) p1.value = this.playerName;
+      if (!p2.value) { do p2.value = randomPirateName(); while (p2.value === p1.value); }
+    }
+    m.pages.forEach((p) => { p.hidden = p.dataset.page !== page; });
+    if (!silent) this._focus(m.pages.find((p) => !p.hidden));
+  }
+  _setPlayerName(v) {
+    this.playerName = sanitizeName(v) || randomPirateName();
+    lsSet('freibeuter.name', this.playerName);
+    if (this._mn) { this._mn.inputs.me.value = this.playerName; this._mn.inputs.p1.value = this.playerName; }
+  }
   _setDifficulty(k, silent) {
     if (!DIFFICULTIES[k]) return; this._difficulty = k; lsSet('freibeuter.difficulty', k);
     this._menu.querySelectorAll('.diff').forEach((b) => { b.setAttribute('aria-checked', String(b.dataset.k === k)); b.tabIndex = b.dataset.k === k ? 0 : -1; });
@@ -250,12 +298,13 @@ export class UI {
     this._show(this._hud);
   }
   hideHUD() { if (this._hud) this._hide(this._hud); }
-  setTurn(who) {
+  /** text: optionaler eigener Text (Hot-Seat: „Rotbart ist am Zug“). */
+  setTurn(who, text) {
     if (!this._hud) this.showHUD();
-    const h = this._hd, foe = who === 'enemy'; if (h.turnKey === who) return; h.turnKey = who;
+    const h = this._hd, foe = who === 'enemy', key = who + '|' + (text || ''); if (h.turnKey === key) return; h.turnKey = key;
     h.turn.classList.toggle('foe', foe);
     h.ti.innerHTML = foe ? I.skull() : I.anchor();
-    h.tt.textContent = foe ? 'Der Feind zielt …' : "Dein Zug, Käpt'n!";
+    h.tt.textContent = text || (foe ? 'Der Feind zielt …' : "Dein Zug, Käpt'n!");
     h.turn.classList.remove('pop'); void h.turn.offsetWidth; h.turn.classList.add('pop');
   }
   updateFleetStatus({ player = [], enemy = [] } = {}) {
@@ -317,8 +366,27 @@ export class UI {
     this._later('banNext', () => { b.className = 'bn'; this._banNext(); }, BANNER_OUT_MS);
   }
 
+  /* ------------------------------------------------------------------ Sichtschutz (Hot-Seat) */
+  showCurtain({ name = '', onReady } = {}) {
+    this._cb.curtain = onReady;
+    if (!this._curtain) {
+      const n = this._curtain = this._screen('fb-curtain');
+      n.innerHTML = `<div class="pnl parch" role="dialog" aria-modal="true" aria-label="Sichtschutz"><div class="art">${I.people()}</div>
+        <h2></h2><p class="sb">Nicht hinschauen! Die Flotten bleiben verborgen, bis das Gerät in den richtigen Händen ist.</p>
+        <button class="btn primary" data-focus></button></div>`;
+      n.querySelector('button').addEventListener('click', () => { const c = this._cb.curtain; this._cb.curtain = null; c && c(); });
+    }
+    const n = this._curtain;
+    n.querySelector('h2').textContent = `Gib das Gerät an ${name}`;
+    n.querySelector('button').textContent = `Ich bin ${name} – bereit`;
+    clearTimeout(this._timers.get(n)); n.hidden = false; n.classList.add('in'); // sofort deckend, ohne Einblenden
+    this._focus(n);
+  }
+  hideCurtain() { if (this._curtain) this._hide(this._curtain, 300); }
+
   /* ------------------------------------------------------------------ Game Over */
-  showGameOver({ won = false, stats = {}, onRestart, onMenu } = {}) {
+  /** Hot-Seat zusätzlich: winnerName und players [{ name, winner, shots, hits, accuracy, turns }] (beide Seiten). */
+  showGameOver({ won = false, stats = {}, winnerName, players, onRestart, onMenu } = {}) {
     this._cb.over = { onRestart, onMenu };
     if (!this._over) {
       const n = this._over = this._screen('fb-over');
@@ -329,12 +397,21 @@ export class UI {
     }
     const n = this._over; n.classList.toggle('lose', !won); n.classList.toggle('win', !!won);
     const g = (l, v) => `<div><span>${l}</span><b>${v}</b></div>`;
+    const duel = Array.isArray(players) && players.length === 2;
+    const title = duel ? `Sieg für ${esc(winnerName)}!` : won ? 'Sieg! Die Meere gehören dir!' : "Ab zu Davy Jones' Kiste …";
+    const sub = duel ? 'Beide Flotten sind aufgedeckt. Die Beute geht an die siegreiche Mannschaft!'
+      : won ? 'Die feindliche Flotte liegt auf dem Meeresgrund. Die Beute gehört dir, Käpt\'n!' : 'Deine Flotte ruht nun bei den Fischen. Aber ein echter Pirat gibt niemals auf!';
+    const table = duel ? `<table class="duel"><thead><tr><th></th>${players.map((p) => `<th class="${p.winner ? 'win' : ''}">${p.winner ? I.check() : ''}${esc(p.name)}</th>`).join('')}</tr></thead><tbody>
+      ${[['Schüsse', (p) => p.shots | 0], ['Treffer', (p) => p.hits | 0], ['Quote', (p) => fmtPct(p.accuracy)], ['Runden', (p) => p.turns | 0]]
+        .map(([l, f]) => `<tr><th>${l}</th>${players.map((p) => `<td>${f(p)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+      <div class="grid one">${g('Dauer', fmtTime(stats.durationSec))}</div>`
+      : `<div class="grid">${g('Schüsse', stats.shots | 0)}${g('Treffer', stats.hits | 0)}${g('Trefferquote', fmtPct(stats.accuracy))}${g('Runden', stats.turns | 0)}${g('Dauer', fmtTime(stats.durationSec))}${g('Flotte', won ? 'Siegreich' : 'Versenkt')}</div>`;
     n.innerHTML = `<div class="pnl parch" role="dialog" aria-modal="true" aria-label="${won ? 'Sieg' : 'Niederlage'}">
       <div class="art">${won ? I.chest() : I.skull()}</div>
-      <h2>${won ? 'Sieg! Die Meere gehören dir!' : "Ab zu Davy Jones' Kiste …"}</h2>
-      <p class="sb">${won ? 'Die feindliche Flotte liegt auf dem Meeresgrund. Die Beute gehört dir, Käpt\'n!' : 'Deine Flotte ruht nun bei den Fischen. Aber ein echter Pirat gibt niemals auf!'}</p>
-      <div class="grid">${g('Schüsse', stats.shots | 0)}${g('Treffer', stats.hits | 0)}${g('Trefferquote', fmtPct(stats.accuracy))}${g('Runden', stats.turns | 0)}${g('Dauer', fmtTime(stats.durationSec))}${g('Flotte', won ? 'Siegreich' : 'Versenkt')}</div>
-      <div class="btns"><button class="btn primary" data-a="again" data-focus>Neue Partie</button><button class="btn" data-a="menu">Hauptmenü</button></div></div>`;
+      <h2>${title}</h2>
+      <p class="sb">${sub}</p>
+      ${table}
+      <div class="btns"><button class="btn primary" data-a="again" data-focus>${duel ? 'Revanche' : 'Neue Partie'}</button><button class="btn" data-a="menu">Hauptmenü</button></div></div>`;
     if (won) { // einmaliger Münzregen (transform/opacity, danach entfernt)
       const pnl = n.querySelector('.pnl'); let h = '';
       for (let i = 0; i < 18; i++) h += `<span class="coin" style="left:${Math.round(Math.random() * 96)}%;--dx:${Math.round(Math.random() * 120 - 60)}px;animation-delay:${(Math.random() * 1.6).toFixed(2)}s;animation-duration:${(2.2 + Math.random() * 1.4).toFixed(2)}s">${I.coin()}</span>`;

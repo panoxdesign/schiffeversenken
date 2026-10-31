@@ -38,7 +38,7 @@ function makeCtx() {
     fx: { fireCannon: () => Promise.resolve(), splash() {}, explosion() {}, startFire() { fires++; return { setPosition() {}, stop() { fires--; } }; }, sinkEffect() {}, celebrate() {}, clearAll() {} },
     cameraRig: { setView: () => Promise.resolve(), shake() {}, setPointerParallax() {} },
     audio: { play: (n) => count('snd:' + n), playMusic() {} },
-    ui: new Proxy({ onPauseRequested: null }, { get: (t, k) => (k in t ? t[k] : (...a) => { count(String(k)); if (k === 'showGameOver') t.gameOver = a[0]; if (k === 'showMainMenu') t.menu = a[0]; return undefined; }), set: (t, k, v) => { t[k] = v; return true; } }),
+    ui: new Proxy({ onPauseRequested: null }, { get: (t, k) => (k in t ? t[k] : (...a) => { count(String(k)); if (k === 'showGameOver') t.gameOver = a[0]; if (k === 'showMainMenu') t.menu = a[0]; if (k === 'announce') (t.announced = t.announced || []).push(a[0]); return undefined; }), set: (t, k, v) => { t[k] = v; return true; } }),
   };
   return { ctx, calls, counters: () => ({ alive, fires }), updaters };
 }
@@ -181,4 +181,90 @@ test('Gegner-Abstraktion: Controller kennt nur versenkte Gegnerschiffe', async (
   assert.deepEqual(gc.logic.enemy.ships[4].cells, target.cells);
   assert.equal(gc.ships.enemy.filter(Boolean).length, 1, 'versenktes Schiff erscheint');
   assert.equal(gc.logic.enemy.ships.filter(Boolean).length, 1);
+});
+
+test('Hot-Seat: Platzierung, Sichtschutz, Rückblick, Spielende', async () => {
+  const { ctx, counters } = makeCtx();
+  const gc = new GameController(ctx);
+  gc.debug.setTimeScale(0);
+  gc.rng = () => 0.9; // Münzwurf: Spieler 2 beginnt
+  gc.start();
+  ctx.ui.menu.onHotseat(['Rotbart', 'Rotbart']);
+  assert.deepEqual(gc.debug.names, { player: 'Rotbart', enemy: 'Rotbart II' }, 'gleiche Namen unterscheidbar');
+  assert.equal(gc.state, 'placement');
+
+  // Spieler 1 platziert links, dann Sichtschutz für Spieler 2
+  gc.debug.autoPlace();
+  gc.debug.confirm();
+  assert.equal(gc.state, 'handover');
+  assert.equal(gc.debug.curtain, 'enemy');
+  assert.ok(gc.ships.player.every((s) => s.v === false), 'Flotte 1 verdeckt');
+  gc.debug.autoPlace();
+  assert.equal(gc.logic.enemy.ships.filter(Boolean).length, 0, 'keine Platzierung hinter dem Sichtschutz');
+  gc.debug.readyCurtain();
+  await until(() => gc.state === 'placement');
+  gc.debug.autoPlace();
+  assert.equal(gc.logic.enemy.ships.filter(Boolean).length, 5, 'Spieler 2 platziert rechts');
+  gc.debug.confirm();
+
+  // Münzwurf -> Sichtschutz für die beginnende Seite
+  assert.equal(await gc.debug.ready(), 'handover');
+  assert.equal(gc.debug.curtain, 'enemy');
+  assert.ok(gc.ships.enemy.every((s) => s.v === false) && gc.ships.player.every((s) => s.v === false));
+  gc.debug.readyCurtain();
+  await gc.debug.ready();
+  assert.ok(ctx.ui.announced.includes('Rotbart II eröffnet das Feuer!'));
+  assert.equal(gc.debug.turnSide, 'enemy');
+  assert.ok(gc.ships.enemy.every((s) => s.v === true) && gc.ships.player.every((s) => s.v === false), 'nur eigene Flotte sichtbar');
+
+  // Spieler 2: Treffer (kein Sichtschutz), dann daneben -> Sichtschutz für Spieler 1
+  await gc.debug.autoFire('hit');
+  assert.equal(await gc.debug.ready(), 'battle', 'nach Treffer erneut schießen');
+  assert.equal(gc.debug.curtain, null);
+  await gc.debug.autoFire('miss');
+  await gc.debug.ready();
+  assert.equal(gc.debug.curtain, 'player');
+  gc.debug.readyCurtain();
+  await gc.debug.ready();
+  const rv = gc.debug.review;
+  assert.equal(rv.side, 'player');
+  assert.deepEqual(rv.shots.map((s) => s.result), ['hit', 'miss']);
+  assert.match(rv.text, /^Rotbart II traf (deine|deinen) \S+ \([A-J]\d+\) und verfehlte bei [A-J]\d+$/);
+  assert.ok(gc.ships.player.every((s) => s.v === true) && gc.ships.enemy.every((s) => s.v === false));
+
+  // Spieler 1 gewinnt
+  while (gc.state !== 'gameover') {
+    await gc.debug.ready();
+    if (gc.debug.curtain) gc.debug.readyCurtain();
+    else await gc.debug.autoFire(gc.debug.turnSide === 'player' ? 'hit' : 'miss');
+  }
+  await until(() => typeof ctx.ui.gameOver === 'object');
+  const go = ctx.ui.gameOver;
+  assert.equal(go.winnerName, 'Rotbart');
+  assert.deepEqual(go.players.map((p) => [p.name, p.winner]), [['Rotbart', true], ['Rotbart II', false]]);
+  assert.equal(go.players[0].hits, 17);
+  assert.equal(go.players[1].shots, gc.statsEnemy.shots);
+  assert.ok(gc.ships.enemy.every((s) => s.v === true), 'beide Flotten aufgedeckt');
+
+  go.onRestart();
+  assert.equal(gc.state, 'placement');
+  assert.equal(gc.debug.mode, 'hotseat');
+  assert.deepEqual(gc.debug.names, { player: 'Rotbart', enemy: 'Rotbart II' });
+  gc.start();
+  assert.deepEqual(counters(), { alive: 0, fires: 0 });
+});
+
+test('Hot-Seat: Hauptmenü während des Sichtschutzes bricht sauber ab', async () => {
+  const { ctx, counters } = makeCtx();
+  const gc = new GameController(ctx);
+  gc.debug.setTimeScale(0);
+  gc.debug.beginHotseat();
+  gc.debug.autoPlace();
+  gc.debug.confirm();
+  assert.equal(gc.debug.curtain, 'enemy');
+  gc.start();
+  assert.equal(gc.debug.curtain, null);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(gc.state, 'menu');
+  assert.deepEqual(counters(), { alive: 0, fires: 0 });
 });

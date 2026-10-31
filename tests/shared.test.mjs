@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { Board } from '../shared/Board.js';
 import { FLEET, RULES, BOARD_SIZE } from '../shared/rules.js';
 import { CODE_ALPHABET, C2S, normalizeCode, sanitizeName, validateFleet, fleetOf, parseMessage } from '../shared/protocol.js';
+import { randomPirateName, distinctNames } from '../shared/names.js';
 import { AIOpponent } from '../src/game/opponents/AIOpponent.js';
 
 const LENGTHS = FLEET.map((f) => f.length);
@@ -102,4 +103,19 @@ test('KI-Gegner: Schnittstelle bis zum Sieg beider Seiten', async () => {
     seen.add(s.row * 10 + s.col);
     assert.equal(mine.receiveShot(s.col, s.row).result, s.result);
   }
+});
+
+test('Piratennamen: max. 16 Zeichen, gleiche Namen unterscheidbar', () => {
+  const rng = mulberry32(5);
+  const seen = new Set();
+  for (let i = 0; i < 2000; i++) {
+    const n = randomPirateName(rng);
+    assert.ok(n.length <= 16 && n === sanitizeName(n), n);
+    seen.add(n);
+  }
+  assert.ok(seen.size > 50);
+  assert.deepEqual(distinctNames('Rotbart', 'Jule'), ['Rotbart', 'Jule']);
+  assert.deepEqual(distinctNames('Rotbart', 'Rotbart'), ['Rotbart', 'Rotbart II']);
+  const [, b] = distinctNames('Käpt\'n Säbelzahn', 'Käpt\'n Säbelzahn');
+  assert.equal(b, 'Käpt\'n Säbelz II');
 });

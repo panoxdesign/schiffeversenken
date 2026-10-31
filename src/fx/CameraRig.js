@@ -110,6 +110,7 @@ export class CameraRig {
     const pc = BOARD_CENTER.player, ec = BOARD_CENTER.enemy;
     s.player = this._staticPose(new Pose(), pc.x, pc.z, BOARD_HALF_VIS + 0.5, BOARD_HALF_VIS + 0.5, 52, 66);
     s.placement = this._staticPose(new Pose(), pc.x, pc.z, BOARD_HALF_VIS, BOARD_HALF_VIS, 56, 70);
+    s.placementEnemy = this._staticPose(new Pose(), ec.x, ec.z, BOARD_HALF_VIS, BOARD_HALF_VIS, 56, 70); // Hot-Seat Spieler 2
     s.enemy = this._staticPose(new Pose(), ec.x, ec.z, BOARD_HALF_VIS + 0.5, BOARD_HALF_VIS + 0.5, 52, 66);
     s.overview = this._staticPose(new Pose(), 0, 0, BOARD_HALF_VIS + 12, BOARD_HALF_VIS + 0.5, 44, 62);
   }

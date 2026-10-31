@@ -1,8 +1,9 @@
-// Spielablauf: MENU -> PLACEMENT -> BATTLE -> GAMEOVER. Inszenierung gegen die Modul-Verträge (ARCHITECTURE.md).
+// Spielablauf: MENU -> PLACEMENT -> BATTLE -> GAMEOVER (Hot-Seat zusätzlich HANDOVER = Sichtschutz). Inszenierung gegen die Modul-Verträge (ARCHITECTURE.md).
 import * as THREE from 'three';
 import { FLEET, RULES, BOARD_SIZE, COL_LABELS, ROW_LABELS, FLAGSHIP_POSITION, BOARD_CENTER } from '../config.js';
 import { Board } from '../../shared/Board.js';
 import { fleetOf } from '../../shared/protocol.js';
+import { distinctNames } from '../../shared/names.js';
 import { AIOpponent } from './opponents/AIOpponent.js';
 import { Input } from './Input.js';
 
@@ -21,12 +22,17 @@ function call(obj, method, ...args) {
 }
 
 const label = (c, r) => ROW_LABELS[r] + COL_LABELS[c];
+const other = (side) => (side === 'player' ? 'enemy' : 'player');
+const ignoreCancel = (e) => { if (e !== CANCEL) console.error('[game] Fehler im Ablauf', e); };
 
 export class GameController {
   constructor(ctx) {
     this.ctx = ctx;
     const { engine } = ctx;
     this.state = 'menu';
+    /** 'ai' | 'hotseat'. Hot-Seat: Spieler 1 = Seite 'player' (links), Spieler 2 = 'enemy' (rechts). */
+    this.mode = 'ai';
+    this.names = { player: '', enemy: '' };
     this.difficulty = 'normal';
     this.rng = Math.random;
 
@@ -36,16 +42,22 @@ export class GameController {
     this._lastPauseToggle = 0;
     this._timeScale = 1; // nur für Debug/Tests
 
-    // enemy ist ein Wissens-Brett: nur Schussergebnisse und versenkte Schiffe, die Flotte kennt der Gegner.
+    // Gegen die KI ist enemy ein Wissens-Brett (nur Schussergebnisse und versenkte Schiffe, die Flotte kennt
+    // der Gegner). Im Hot-Seat liegen beide Flotten vollständig hier.
     this.logic = { player: this._newBoard(), enemy: this._newBoard() };
     this.ships = { player: [], enemy: [] };
     this.flagships = { player: null, enemy: null };
     this.opponent = null;
-    this.stats = this._newStats();
+    this.stats = this._newStats(); // Spieler links
+    this.statsEnemy = this._newStats(); // Seite rechts (Hot-Seat: Spieler 2)
     this._view = null;
     this._pending = null; // wartet auf Spieler-Schuss
     this._readyWaiters = [];
-    this._pl = { selected: 0, orientation: 'h', hover: null };
+    this._pl = { side: 'player', selected: 0, orientation: 'h', hover: null };
+    this._turnSide = 'player'; // wer schießt (Hot-Seat: wer vor dem Gerät sitzt)
+    this._aim = 'enemy'; // Brett, auf das gezielt wird
+    this._curtain = null; // offener Sichtschutz { side, resolve, reject }
+    this._hs = this._newHotseat();
 
     // Feuer-Handles, deren Position jeden Frame nachgeführt wird (Schiffe schaukeln)
     this._fires = [];
@@ -64,6 +76,10 @@ export class GameController {
 
   _newBoard() { return new Board({ size: BOARD_SIZE, noTouching: RULES.noTouching }); }
   _newStats() { return { shots: 0, hits: 0, turns: 0, startedAt: 0 }; }
+  _newHotseat() { return { received: { player: [], enemy: [] }, review: null }; }
+  _statsOf(side) { return side === 'player' ? this.stats : this.statsEnemy; }
+  /** Aus wessen Sicht HUD und Schiffe gezeigt werden. */
+  _viewer() { return this.mode === 'hotseat' ? this._turnSide : 'player'; }
 
   // ------------------------------------------------------------------ Menü
   start() {
@@ -73,21 +89,38 @@ export class GameController {
     call(world, 'setMood', 'menu');
     this._setView('menu', 1.6);
     call(audio, 'playMusic', 'menu');
-    call(ui, 'showMainMenu', { onStart: (key) => this._beginPlacement(key) });
+    call(ui, 'showMainMenu', {
+      onStart: (key) => this._beginPlacement(key),
+      onHotseat: (names) => this._beginHotseat(names),
+    });
   }
 
   // ------------------------------------------------------------------ Platzierung
   _beginPlacement(key) {
-    const { ui, world, audio, boards } = this.ctx;
     this._resetGame();
+    this.mode = 'ai';
     if (key) this.difficulty = key;
+    this._enterPlacement('player');
+  }
+
+  /** Hot-Seat starten. names: [Spieler 1, Spieler 2]. */
+  _beginHotseat(names) {
+    this._resetGame();
+    this.mode = 'hotseat';
+    const [a, b] = distinctNames(names[0], names[1]);
+    this.names = { player: a, enemy: b };
+    this._enterPlacement('player');
+  }
+
+  _enterPlacement(side) {
+    const { ui, world, audio, boards } = this.ctx;
     this.state = 'placement';
     call(ui, 'hideMainMenu');
     call(world, 'setMood', 'menu');
     call(audio, 'playMusic', 'menu');
-    this._setView('placement', 1.6);
-    this._pl = { selected: 0, orientation: 'h', hover: null };
-    this.input.setBoard(boards.player);
+    this._setView(side === 'player' ? 'placement' : 'placementEnemy', 1.6);
+    this._pl = { side, selected: 0, orientation: 'h', hover: null };
+    this.input.setBoard(boards[side]);
     call(ui, 'showPlacement', {
       fleet: FLEET,
       onSelectShip: (i) => this._plSelect(i),
@@ -96,12 +129,14 @@ export class GameController {
       onClear: () => this._plClear(),
       onConfirm: () => this._plConfirm(),
     });
-    call(ui, 'announce', 'Platziere deine Flotte', 'info');
+    call(ui, 'announce', this.mode === 'hotseat' ? `${this.names[side]}, platziere deine Flotte` : 'Platziere deine Flotte', 'info');
     this._plRefresh();
   }
 
+  _plBoard() { return this.logic[this._pl.side]; }
+
   _plNextFree() {
-    for (let i = 0; i < FLEET.length; i++) if (!this.logic.player.isPlaced(i)) return i;
+    for (let i = 0; i < FLEET.length; i++) if (!this._plBoard().isPlaced(i)) return i;
     return -1;
   }
 
@@ -114,32 +149,35 @@ export class GameController {
   _plRefresh() {
     const { ui, boards } = this.ctx;
     const pl = this._pl;
-    const placed = FLEET.map((f, i) => this.logic.player.isPlaced(i));
+    const lb = this._plBoard(), view = boards[pl.side];
+    const placed = FLEET.map((f, i) => lb.isPlaced(i));
     call(ui, 'updatePlacement', { placed, selectedIndex: pl.selected, orientation: pl.orientation, canConfirm: placed.every(Boolean) });
     const h = pl.hover;
-    if (!h || pl.selected < 0 || this.state !== 'placement') { call(boards.player, 'hideGhost'); return; }
+    if (!h || pl.selected < 0 || this.state !== 'placement') { call(view, 'hideGhost'); return; }
     const len = LENGTHS[pl.selected];
     const a = this._plAnchor(len, h.col, h.row, pl.orientation);
-    const valid = this.logic.player.canPlace(len, a.col, a.row, pl.orientation, pl.selected);
-    call(boards.player, 'showGhost', len, a.col, a.row, pl.orientation, valid);
+    const valid = lb.canPlace(len, a.col, a.row, pl.orientation, pl.selected);
+    call(view, 'showGhost', len, a.col, a.row, pl.orientation, valid);
   }
 
   /** Visuelles Schiff mit der Logik abgleichen. */
   _plSync(i) {
     const { shipFactory, boards } = this.ctx;
-    const s = this.logic.player.ships[i];
-    let obj = this.ships.player[i];
+    const side = this._pl.side;
+    const s = this.logic[side].ships[i];
+    let obj = this.ships[side][i];
     if (!s) { if (obj) call(obj, 'setVisible', false); return; }
-    if (!obj) { obj = call(shipFactory, 'createShip', LENGTHS[i], 'player'); this.ships.player[i] = obj; }
-    call(obj, 'place', boards.player, s.col, s.row, s.orientation);
+    if (!obj) { obj = call(shipFactory, 'createShip', LENGTHS[i], side); this.ships[side][i] = obj; }
+    call(obj, 'place', boards[side], s.col, s.row, s.orientation);
     call(obj, 'setVisible', true);
   }
 
   _plSelect(i) {
     if (this.state !== 'placement' || i < 0 || i >= FLEET.length) return;
-    if (this.logic.player.isPlaced(i)) { // aufnehmen
-      this._pl.orientation = this.logic.player.ships[i].orientation;
-      this.logic.player.remove(i);
+    const lb = this._plBoard();
+    if (lb.isPlaced(i)) { // aufnehmen
+      this._pl.orientation = lb.ships[i].orientation;
+      lb.remove(i);
       this._plSync(i);
     }
     this._pl.selected = i;
@@ -156,7 +194,7 @@ export class GameController {
 
   _plRandom() {
     if (this.state !== 'placement') return;
-    this.logic.player.randomize(LENGTHS, this.rng);
+    this._plBoard().randomize(LENGTHS, this.rng);
     for (let i = 0; i < FLEET.length; i++) this._plSync(i);
     this._pl.selected = -1;
     call(this.ctx.audio, 'play', 'place');
@@ -165,7 +203,7 @@ export class GameController {
 
   _plClear() {
     if (this.state !== 'placement') return;
-    this.logic.player.clear();
+    this._plBoard().clear();
     for (let i = 0; i < FLEET.length; i++) this._plSync(i);
     this._pl.selected = 0;
     call(this.ctx.audio, 'play', 'click');
@@ -174,11 +212,21 @@ export class GameController {
 
   _plConfirm() {
     if (this.state !== 'placement' || this._plNextFree() !== -1) return;
-    this._startBattle();
+    if (this.mode === 'hotseat' && this._pl.side === 'player') this._hsHandoverPlacement();
+    else this._startBattle();
+  }
+
+  /** Hot-Seat: Spieler 1 fertig -> Sichtschutz -> Spieler 2 platziert rechts. */
+  _hsHandoverPlacement() {
+    const { ui, boards } = this.ctx;
+    const token = this._token;
+    call(ui, 'hidePlacement');
+    call(boards.player, 'hideGhost');
+    this._handover('enemy', token).then(() => this._enterPlacement('enemy')).catch(ignoreCancel);
   }
 
   _plClick(cell) {
-    const pl = this._pl, lp = this.logic.player, audio = this.ctx.audio;
+    const pl = this._pl, lp = this._plBoard(), audio = this.ctx.audio;
     const idx = lp.shipAt(cell.col, cell.row);
     if (idx >= 0) { // platziertes Schiff wieder aufnehmen
       pl.orientation = lp.ships[idx].orientation;
@@ -210,10 +258,10 @@ export class GameController {
       this._plRefresh();
     } else if (this.state === 'battle' && this._pending) {
       if (cell) {
-        call(boards.enemy, 'setHover', cell.col, cell.row, this.logic.enemy.wasShot(cell.col, cell.row) ? 'invalid' : 'aim');
+        call(boards[this._aim], 'setHover', cell.col, cell.row, this.logic[this._aim].wasShot(cell.col, cell.row) ? 'invalid' : 'aim');
         call(ui, 'setCoordinate', label(cell.col, cell.row));
       } else {
-        call(boards.enemy, 'setHover', 0, 0, null);
+        call(boards[this._aim], 'setHover', 0, 0, null);
         call(ui, 'setCoordinate', null);
       }
     }
@@ -223,11 +271,11 @@ export class GameController {
     if (this._paused) return;
     if (this.state === 'placement') this._plClick(cell);
     else if (this.state === 'battle' && this._pending) {
-      if (this.logic.enemy.wasShot(cell.col, cell.row)) { call(this.ctx.audio, 'play', 'error'); return; }
+      if (this.logic[this._aim].wasShot(cell.col, cell.row)) { call(this.ctx.audio, 'play', 'error'); return; }
       const p = this._pending;
       this._pending = null;
       this.input.setBoard(null);
-      call(this.ctx.boards.enemy, 'setHover', 0, 0, null);
+      call(this.ctx.boards[this._aim], 'setHover', 0, 0, null);
       call(this.ctx.ui, 'setCoordinate', null);
       p.resolve(cell);
     }
@@ -309,6 +357,7 @@ export class GameController {
     const w = this._resumeWaiters.splice(0);
     for (const r of w) r();
     if (this._pending) { const p = this._pending; this._pending = null; p.reject(CANCEL); }
+    if (this._curtain) { const c = this._curtain; this._curtain = null; c.reject(CANCEL); }
     this._readyWaiters.splice(0).forEach((r) => r());
     this.input.enabled = true;
     this.input.setBoard(null);
@@ -324,11 +373,104 @@ export class GameController {
       call(b, 'setActive', false);
     }
     call(fx, 'clearAll');
-    for (const m of ['hideMainMenu', 'hidePlacement', 'hideHUD', 'hideGameOver', 'hidePause']) call(ui, m);
+    for (const m of ['hideMainMenu', 'hidePlacement', 'hideHUD', 'hideGameOver', 'hidePause', 'hideCurtain']) call(ui, m);
     call(ui, 'setCoordinate', null);
     call(this.opponent, 'dispose');
     this.opponent = null;
     this.stats = this._newStats();
+    this.statsEnemy = this._newStats();
+    this._hs = this._newHotseat();
+    this._turnSide = 'player';
+    this._aim = 'enemy';
+  }
+
+  // ------------------------------------------------------------------ Hot-Seat: Sichtschutz & Rückblick
+  /** Sichtbarkeit der (nicht versenkten) Schiffe: nur die von viewer; 'all' = alle, null = keine. */
+  _showShips(viewer) {
+    for (const side of ['player', 'enemy']) {
+      this.ships[side].forEach((obj, i) => {
+        const s = this.logic[side].ships[i];
+        if (obj && s && !s.sunk) call(obj, 'setVisible', viewer === 'all' || viewer === side);
+      });
+    }
+  }
+
+  /** Vollbild-Sichtschutz, bis side „bereit“ bestätigt. */
+  async _handover(side, token) {
+    this.state = 'handover';
+    this.input.setBoard(null);
+    this._showShips(null);
+    call(this.ctx.ui, 'setCoordinate', null);
+    await new Promise((resolve, reject) => {
+      this._curtain = { side, resolve, reject };
+      call(this.ctx.ui, 'showCurtain', { name: this.names[side], onReady: () => this._curtainReady() });
+      this._readyWaiters.splice(0).forEach((r) => r());
+    });
+    await this._cp(token);
+  }
+
+  _curtainReady() {
+    const c = this._curtain;
+    if (!c) return;
+    this._curtain = null;
+    call(this.ctx.ui, 'hideCurtain');
+    call(this.ctx.audio, 'play', 'bell', { volume: 0.4 });
+    c.resolve();
+  }
+
+  async _hotseatLoop(token) {
+    try {
+      let side = this.rng() < 0.5 ? 'player' : 'enemy'; // Münzwurf
+      for (let opening = true; ; opening = false) {
+        await this._handover(side, token);
+        this.state = 'battle';
+        await this._hsBriefing(side, opening, token);
+        if (await this._humanTurn(side, token) === 'won') { await this._gameOver(true, token, side); return; }
+        await this._wait(0.6, token);
+        side = other(side);
+      }
+    } catch (e) {
+      if (e === CANCEL) return;
+      console.error('[game] Fehler im Hot-Seat-Ablauf', e);
+      this.start();
+    }
+  }
+
+  /** Nach der Übergabe: eigene Flotte zeigen, neue Einschläge des Gegners aufleuchten lassen. */
+  async _hsBriefing(side, opening, token) {
+    const { ui, boards, audio } = this.ctx;
+    this._turnSide = side;
+    this._showShips(side);
+    this._updateUI();
+    await this._camTo(side, 1.1, token);
+    if (opening) {
+      call(ui, 'announce', `${this.names[side]} eröffnet das Feuer!`, 'turn');
+      await this._wait(1.2, token);
+      return;
+    }
+    const shots = this._hs.received[side].splice(0);
+    if (!shots.length) return;
+    this._hs.review = { side, shots, text: this._reviewText(other(side), shots) };
+    call(ui, 'announce', this._hs.review.text, 'info');
+    for (const s of shots) {
+      call(boards[side], 'setHover', s.col, s.row, s.result === 'miss' ? 'aim' : 'invalid');
+      call(audio, 'play', s.result === 'miss' ? 'splash' : 'explosion', { volume: 0.35 });
+      await this._wait(0.5, token);
+    }
+    call(boards[side], 'setHover', 0, 0, null);
+    await this._wait(0.6, token);
+  }
+
+  /** z. B. „Rotbart traf deine Fregatte (B7) und verfehlte bei C4“ – ohne Pronomen. */
+  _reviewText(shooter, shots) {
+    const parts = shots.map((s) => {
+      const where = label(s.col, s.row);
+      if (s.result === 'miss') return `verfehlte bei ${where}`;
+      const f = FLEET[s.shipIndex];
+      return `${s.result === 'sunk' ? 'versenkte' : 'traf'} ${f.id === 'schoner' ? 'deinen' : 'deine'} ${f.name} (${where})`;
+    });
+    const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} und ${parts[parts.length - 1]}` : parts[0];
+    return `${this.names[shooter]} ${list}`;
   }
 
   // ------------------------------------------------------------------ Kampf
@@ -344,18 +486,20 @@ export class GameController {
     const token = this._token;
     this.state = 'battle';
     call(ui, 'hidePlacement');
-    call(boards.player, 'hideGhost');
+    call(boards[this._pl.side], 'hideGhost');
     this.input.setBoard(null);
 
     this._ensureFlagships();
-    this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
     this.stats = this._newStats();
+    this.statsEnemy = this._newStats();
     this.stats.startedAt = performance.now();
 
     call(world, 'setMood', 'battle');
     call(audio, 'playMusic', 'battle');
     call(ui, 'showHUD');
-    this._updateUI('player');
+    if (this.mode === 'hotseat') { this._hotseatLoop(token); return; }
+    this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
+    this._updateUI();
     this._battleLoop(token);
   }
 
@@ -373,7 +517,7 @@ export class GameController {
         await this._camTo(first === 'player' ? 'enemy' : 'player', 1.4, token);
         for (;;) {
           if (first === 'player') {
-            const w = await this._playerTurn(token);
+            const w = await this._humanTurn('player', token);
             if (w === 'won') { await this._gameOver(true, token); return; }
           }
           first = 'player';
@@ -392,27 +536,31 @@ export class GameController {
   _awaitPlayerShot(token) {
     return new Promise((resolve, reject) => {
       this._pending = { resolve, reject };
-      this.input.setBoard(this.ctx.boards.enemy);
+      this.input.setBoard(this.ctx.boards[this._aim]);
       this.input.refresh();
       this._readyWaiters.splice(0).forEach((r) => r());
     });
   }
 
-  async _playerTurn(token) {
+  /** Zug eines Menschen am Gerät (gegen die KI immer 'player'). */
+  async _humanTurn(side, token) {
     const { ui, boards } = this.ctx;
-    this.stats.turns++;
-    call(ui, 'setTurn', 'player');
-    call(boards.player, 'setActive', false);
-    call(boards.enemy, 'setActive', true);
-    await this._camTo('enemy', 1.1, token);
-    call(ui, 'announce', 'Dein Zug', 'turn');
+    const target = other(side), hs = this.mode === 'hotseat';
+    this._statsOf(side).turns++;
+    this._turnSide = side;
+    this._aim = target;
+    call(ui, 'setTurn', 'player', hs ? `${this.names[side]} ist am Zug` : undefined);
+    call(boards[side], 'setActive', false);
+    call(boards[target], 'setActive', true);
+    await this._camTo(target, 1.1, token);
+    call(ui, 'announce', hs ? `Feuer frei, ${this.names[side]}!` : 'Dein Zug', 'turn');
     for (;;) {
       const cell = await this._awaitPlayerShot(token);
       await this._cp(token);
-      const res = await this._shoot('player', cell.col, cell.row, token);
+      const res = await this._shoot(side, cell.col, cell.row, token);
       if (res.result === 'repeat') continue;
-      this._updateUI('player');
-      if (this._fleetSunk('enemy')) return 'won';
+      this._updateUI();
+      if (this._fleetSunk(target)) return 'won';
       if (res.result === 'miss' || !RULES.shootAgainOnHit) return 'continue';
     }
   }
@@ -429,7 +577,7 @@ export class GameController {
       await this._cp(token);
       if (!shot) return 'continue';
       const res = await this._shoot('enemy', shot.col, shot.row, token);
-      this._updateUI('enemy');
+      this._updateUI();
       if (this._fleetSunk('player')) return 'lost';
       if (res.result === 'miss' || res.result === 'repeat' || !RULES.shootAgainOnHit) return 'continue';
     }
@@ -439,7 +587,7 @@ export class GameController {
 
   /** Gegner-Schuss auf das eigene Brett auswerten bzw. eigenen Schuss beim Gegner auflösen lassen. */
   async _resolveShot(shooter, col, row, token) {
-    if (shooter === 'enemy') return this.logic.player.receiveShot(col, row);
+    if (shooter === 'enemy' || this.mode === 'hotseat') return this.logic[other(shooter)].receiveShot(col, row);
     const kb = this.logic.enemy;
     if (kb.wasShot(col, row)) return { result: 'repeat', shipIndex: -1, cellIndex: -1, cells: [] };
     const r = await this.opponent.shoot(col, row);
@@ -460,7 +608,10 @@ export class GameController {
     const view = boards[tSide];
     const res = await this._resolveShot(shooter, col, row, token);
     if (res.result === 'repeat') return res;
-    if (shooter === 'player') { this.stats.shots++; if (res.result !== 'miss') this.stats.hits++; }
+    const st = this._statsOf(shooter);
+    st.shots++;
+    if (res.result !== 'miss') st.hits++;
+    if (this.mode === 'hotseat') this._hs.received[tSide].push({ col, row, result: res.result, shipIndex: res.shipIndex });
 
     const target = view.cellToWorld ? view.cellToWorld(col, row, new THREE.Vector3()) : new THREE.Vector3();
     target.y = call(world, 'getWaterHeight', target.x, target.z) || 0;
@@ -477,7 +628,7 @@ export class GameController {
     await this._race(call(fx, 'fireCannon', muzzle, target, { flightTime: 0.9 }), token);
 
     // Ergebnis
-    const mine = shooter === 'player';
+    const mine = this.mode === 'hotseat' || shooter === 'player';
     if (res.result === 'miss') {
       call(fx, 'splash', target);
       call(audio, 'play', 'splash', { x: target.x });
@@ -492,7 +643,7 @@ export class GameController {
     call(audio, 'play', 'explosion', { x: target.x });
     call(cameraRig, 'shake', 0.8);
     call(view, 'markHit', col, row);
-    if (tSide === 'player') call(ship, 'damage', res.cellIndex);
+    if (res.cellIndex >= 0) call(ship, 'damage', res.cellIndex);
     this._startFire(tSide, col, row, ship, res.cellIndex, target);
 
     if (res.result === 'hit') {
@@ -510,9 +661,9 @@ export class GameController {
     if (!ship) { // Gegnerschiff wird erst beim Versenken bekannt
       ship = this.ships[tSide][res.shipIndex] = call(shipFactory, 'createShip', info.length, tSide);
       call(ship, 'place', view, info.col, info.row, info.orientation);
+      for (let i = 0; i < info.length; i++) call(ship, 'damage', i);
     }
     call(ship, 'setVisible', true);
-    if (tSide === 'enemy') for (let i = 0; i < info.length; i++) call(ship, 'damage', i);
     const a = view.cellToWorld(info.col, info.row, new THREE.Vector3());
     const b = view.cellToWorld(info.orientation === 'h' ? info.col + info.length - 1 : info.col, info.orientation === 'v' ? info.row + info.length - 1 : info.row, new THREE.Vector3());
     const mid = a.add(b).multiplyScalar(0.5);
@@ -520,7 +671,7 @@ export class GameController {
     call(fx, 'sinkEffect', mid, info.length, info.orientation);
     call(audio, 'play', 'sink', { x: mid.x });
     if (RULES.noTouching) for (const n of this.logic[tSide].neighborsOf(res.shipIndex)) call(view, 'markBlocked', n.col, n.row);
-    this._updateUI(shooter);
+    this._updateUI();
     const over = this._fleetSunk(tSide);
     await this._wait(over ? 0.8 : 1.0, token);
     if (over) await this._race(sinkP, token, 4000);
@@ -532,7 +683,7 @@ export class GameController {
     const handle = call(this.ctx.fx, 'startFire', target, 1);
     if (!handle) return;
     this._fires.push({
-      handle, side: tSide, col, row, ship: tSide === 'player' ? ship : null,
+      handle, side: tSide, col, row, ship: ship || null,
       idx: cellIndex, x: target.x, z: target.z,
     });
   }
@@ -563,21 +714,25 @@ export class GameController {
   }
 
   // ------------------------------------------------------------------ UI-Status
-  _updateUI(turn) {
+  _updateUI() {
     const { ui } = this.ctx;
+    const viewer = this._viewer();
     const st = (side, hidden) => FLEET.map((f, i) => {
       const s = this.logic[side].ships[i];
       return { name: f.name, length: f.length, hits: s ? (hidden ? (s.sunk ? f.length : 0) : s.hits) : 0, sunk: !!(s && s.sunk) };
     });
-    call(ui, 'updateFleetStatus', { player: st('player', false), enemy: st('enemy', true) });
-    const { shots, hits } = this.stats;
-    call(ui, 'updateStats', { shots, hits, accuracy: shots ? hits / shots : 0, turn: this.stats.turns });
+    call(ui, 'updateFleetStatus', { player: st(viewer, false), enemy: st(other(viewer), true) });
+    const { shots, hits, turns } = this._statsOf(viewer);
+    call(ui, 'updateStats', { shots, hits, accuracy: shots ? hits / shots : 0, turn: turns });
   }
 
   // ------------------------------------------------------------------ Spielende
-  async _gameOver(won, token) {
+  /** winner: Hot-Seat-Seite des Siegers. */
+  async _gameOver(won, token, winner) {
     const { world, audio, fx, ui, boards } = this.ctx;
+    const hs = this.mode === 'hotseat';
     this.state = 'gameover';
+    if (hs) this._showShips('all');
     this._readyWaiters.splice(0).forEach((r) => r());
     this.input.setBoard(null);
     call(boards.player, 'setActive', false);
@@ -586,7 +741,7 @@ export class GameController {
     call(world, 'setMood', won ? 'victory' : 'defeat');
     call(audio, 'playMusic', 'none');
     call(audio, 'play', won ? 'victory' : 'defeat');
-    this._setView(won ? 'victory' : 'defeat', 2.2);
+    this._setView(hs ? 'overview' : won ? 'victory' : 'defeat', 2.2);
     if (won) {
       call(fx, 'celebrate', BOARD_CENTER.player.clone());
       await this._wait(1.0, token);
@@ -597,10 +752,16 @@ export class GameController {
     }
     const { shots, hits, turns, startedAt } = this.stats;
     call(ui, 'hideHUD');
+    const durationSec = Math.round((performance.now() - startedAt) / 1000);
+    const sum = (st) => ({ shots: st.shots, hits: st.hits, accuracy: st.shots ? st.hits / st.shots : 0, turns: st.turns });
     call(ui, 'showGameOver', {
       won,
-      stats: { shots, hits, accuracy: shots ? hits / shots : 0, turns, durationSec: Math.round((performance.now() - startedAt) / 1000) },
-      onRestart: () => this._beginPlacement(this.difficulty),
+      stats: { shots, hits, accuracy: shots ? hits / shots : 0, turns, durationSec },
+      ...(hs && {
+        winnerName: this.names[winner],
+        players: ['player', 'enemy'].map((side) => ({ name: this.names[side], winner: side === winner, ...sum(this._statsOf(side)) })),
+      }),
+      onRestart: hs ? () => this._beginHotseat([this.names.player, this.names.enemy]) : () => this._beginPlacement(this.difficulty),
       onMenu: () => this.start(),
     });
   }
@@ -616,6 +777,16 @@ export class GameController {
       /** Zeitskala für interne Wartezeiten (0.1 = 10x schneller). */
       setTimeScale(s) { self._timeScale = s; },
       begin(key = 'normal') { self._beginPlacement(key); },
+      get mode() { return self.mode; },
+      get names() { return { ...self.names }; },
+      /** Seite, deren Sichtschutz gerade offen ist, sonst null. */
+      get curtain() { return self._curtain ? self._curtain.side : null; },
+      /** Letzter Hot-Seat-Rückblick { side, shots, text }. */
+      get review() { return self._hs.review; },
+      get turnSide() { return self._turnSide; },
+      beginHotseat(names = ['Rotbart', 'Einaugen-Jule']) { self._beginHotseat(names); return self.state; },
+      /** „Ich bin <Name> – bereit“ bestätigen. */
+      readyCurtain() { const side = this.curtain; self._curtainReady(); return side; },
       autoPlace() { self._plRandom(); return self.state; },
       confirm() { self._plConfirm(); return self.state; },
       /** Menü -> Platzierung -> Kampf (Schiffe zufällig). */
@@ -623,7 +794,7 @@ export class GameController {
       /** Resolve, sobald der Spieler schießen darf oder das Spiel zu Ende ist. */
       ready(timeoutMs = 60000) {
         return new Promise((resolve) => {
-          if (self._pending || self.state === 'gameover') { resolve(self.state); return; }
+          if (self._pending || self._curtain || self.state === 'gameover') { resolve(self.state); return; }
           const t = setTimeout(() => resolve('timeout'), timeoutMs);
           self._readyWaiters.push(() => { clearTimeout(t); resolve(self.state); });
         });
@@ -638,7 +809,7 @@ export class GameController {
       async autoFire(mode = 'random') {
         await this.ready();
         if (!self._pending) return null;
-        const known = self.logic.enemy, truth = self.opponent && self.opponent.board, cand = [];
+        const known = self.logic[self._aim], truth = self.mode === 'hotseat' ? known : self.opponent && self.opponent.board, cand = [];
         for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) {
           if (known.wasShot(c, r)) continue;
           const isShip = truth ? truth.shipAt(c, r) >= 0 : false;
@@ -666,7 +837,7 @@ export class GameController {
         return this.status();
       },
       status() {
-        return { state: self.state, difficulty: self.difficulty, stats: { ...self.stats }, fires: self._fires.length, pending: !!self._pending };
+        return { state: self.state, mode: self.mode, difficulty: self.difficulty, stats: { ...self.stats }, fires: self._fires.length, pending: !!self._pending, curtain: this.curtain };
       },
     };
   }
