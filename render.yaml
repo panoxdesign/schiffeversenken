@@ -6,6 +6,8 @@ services:
     name: freibeuter-hafen
     runtime: node
     plan: free
+    # Nach dem Anlegen nicht mehr änderbar; Frankfurt für kurze Wege zu Spielern in Europa.
+    region: frankfurt
     buildCommand: npm ci --omit=dev
     startCommand: npm run server
     healthCheckPath: /health
