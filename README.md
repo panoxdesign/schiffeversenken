@@ -10,6 +10,7 @@ npm install
 npm run dev        # http://localhost:5173
 npm run build      # Produktions-Build nach dist/
 npm run preview
+npm run server     # Spielserver für Online (Port 8787, siehe server/main.js)
 ```
 
 URL-Parameter:
@@ -38,6 +39,6 @@ URL-Parameter:
 | `src/ui` | HTML/CSS-Oberfläche (Menüs, HUD, Banner) |
 | `src/game` | Spielregeln, KI, Eingabe, Spielablauf |
 | `dev/` | Testseiten der einzelnen Module (z. B. `/dev/ships.html`) |
-| `tests/` | Logik- und Controller-Tests: `npm test` |
+| `tests/` | Logik-, Controller- und Server-Tests: `npm test` |
 
 Schnittstellen und Performance-Budget stehen in `ARCHITECTURE.md`.

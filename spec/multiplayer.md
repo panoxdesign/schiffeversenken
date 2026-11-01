@@ -295,7 +295,7 @@ Fortschritt hier abhaken:
 
 - [x] Etappe 1 – Umbau
 - [x] Etappe 2 – Hot-Seat
-- [ ] Etappe 3 – Server-Kern
+- [x] Etappe 3 – Server-Kern
 - [ ] Etappe 4 – Online mit Freunden
 - [ ] Etappe 4a – Deployment
 - [ ] Etappe 5 – Robustheit
