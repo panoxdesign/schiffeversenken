@@ -1,10 +1,14 @@
-// Spielablauf: MENU -> PLACEMENT -> BATTLE -> GAMEOVER (Hot-Seat zusätzlich HANDOVER = Sichtschutz). Inszenierung gegen die Modul-Verträge (ARCHITECTURE.md).
+// Spielablauf: MENU -> PLACEMENT -> BATTLE -> GAMEOVER (Hot-Seat zusätzlich HANDOVER = Sichtschutz, Online LOBBY). Inszenierung gegen die Modul-Verträge (ARCHITECTURE.md).
 import * as THREE from 'three';
 import { FLEET, RULES, BOARD_SIZE, COL_LABELS, ROW_LABELS, FLAGSHIP_POSITION, BOARD_CENTER } from '../config.js';
 import { Board } from '../../shared/Board.js';
-import { fleetOf } from '../../shared/protocol.js';
+import { fleetOf, normalizeCode } from '../../shared/protocol.js';
 import { distinctNames } from '../../shared/names.js';
 import { AIOpponent } from './opponents/AIOpponent.js';
+import { NetClient } from '../net/NetClient.js';
+import { NetOpponent } from '../net/NetOpponent.js';
+import { inviteLink } from '../net/link.js';
+import { genitive, yourShip, netErrorText, gameOverText } from './onlineTexts.js';
 import { Input } from './Input.js';
 
 const CANCEL = { cancelled: true };
@@ -30,14 +34,17 @@ export class GameController {
     this.ctx = ctx;
     const { engine } = ctx;
     this.state = 'menu';
-    /** 'ai' | 'hotseat'. Hot-Seat: Spieler 1 = Seite 'player' (links), Spieler 2 = 'enemy' (rechts). */
+    /** 'ai' | 'hotseat' | 'online'. Hot-Seat: Spieler 1 = Seite 'player' (links), Spieler 2 = 'enemy' (rechts).
+     *  Online: der eigene Spieler ist immer 'player'. */
     this.mode = 'ai';
     this.names = { player: '', enemy: '' };
     this.difficulty = 'normal';
     this.rng = Math.random;
 
     this._token = 0;
-    this._paused = false;
+    this._paused = false; // Abläufe angehalten (nicht online)
+    this._pauseMenu = false; // Pausenmenü offen (online läuft das Spiel dabei weiter)
+    this._net = null; // Online: Verbindung während der Lobby (danach gehört sie dem NetOpponent)
     this._resumeWaiters = [];
     this._lastPauseToggle = 0;
     this._timeScale = 1; // nur für Debug/Tests
@@ -82,17 +89,116 @@ export class GameController {
   _viewer() { return this.mode === 'hotseat' ? this._turnSide : 'player'; }
 
   // ------------------------------------------------------------------ Menü
-  start() {
+  /**
+   * @param {{ join?: string, notice?: {title: string, text: string, reload?: boolean}, page?: string }} [opts]
+   *   join: Code aus dem Einladungslink (Menü wird übersprungen); notice: Hinweis über dem Menü; page: Menüseite.
+   */
+  start({ join, notice, page } = {}) {
     this._resetGame();
-    const { world, cameraRig, audio, ui } = this.ctx;
+    const { world, audio, ui } = this.ctx;
     this.state = 'menu';
     call(world, 'setMood', 'menu');
     this._setView('menu', 1.6);
     call(audio, 'playMusic', 'menu');
     call(ui, 'showMainMenu', {
+      page,
       onStart: (key) => this._beginPlacement(key),
       onHotseat: (names) => this._beginHotseat(names),
+      onInvite: () => this._onlineInvite(),
+      onJoin: (code) => this._onlineJoin(code),
     });
+    if (notice) this._notice(notice);
+    if (join != null) this._onlineJoin(join);
+  }
+
+  _notice({ title, text, reload }) {
+    call(this.ctx.ui, 'showLobby', {
+      phase: 'notice', title, text,
+      action: reload ? { label: 'Neu laden', onClick: () => globalThis.location?.reload() } : null,
+      onCancel: () => call(this.ctx.ui, 'hideLobby'),
+    });
+  }
+
+  // ------------------------------------------------------------------ Online: Lobby
+  _playerName() {
+    const n = this.ctx.ui && this.ctx.ui.playerName;
+    return typeof n === 'string' ? n : '';
+  }
+
+  /** Lobby betreten: Menü weg, Verbindung zum Hafen aufbauen. Liefert den Ablauf-Token. */
+  _enterLobby(title, text) {
+    this._resetGame();
+    this.state = 'lobby';
+    call(this.ctx.ui, 'hideMainMenu');
+    call(this.ctx.ui, 'showLobby', { phase: 'busy', title, text, onCancel: this._toOnlineMenu });
+    return this._token;
+  }
+
+  /** Zurück ins Online-Menü (bricht Lobby bzw. Partie ab). */
+  _toOnlineMenu = () => this.start({ page: 'online' });
+
+  async _connect(token) {
+    const net = this.ctx.net;
+    if (!net || typeof net.connect !== 'function') throw Object.assign(new Error('kein Netz'), { code: 'unavailable' });
+    const transport = await net.connect();
+    if (token !== this._token) { transport.close(); throw CANCEL; }
+    const client = this._net = new NetClient(transport);
+    client.onLost = () => { if (this._net === client) this.start({ notice: netErrorText('lost') }); };
+    await client.hello(this._playerName());
+    await this._cp(token);
+    return client;
+  }
+
+  /** Freund einladen: Raum anlegen, Code und Link zeigen, auf den Gast warten. */
+  async _onlineInvite() {
+    const token = this._enterLobby('Hafen wird angesteuert …', 'Einen Augenblick, Käpt\'n.');
+    try {
+      const client = await this._connect(token);
+      const code = await client.createRoom();
+      await this._cp(token);
+      call(this.ctx.ui, 'showLobby', {
+        phase: 'invite', code, link: inviteLink(code, globalThis.location?.href), onCancel: this._toOnlineMenu,
+      });
+      const matched = await client.waitMatched();
+      await this._cp(token);
+      this._beginOnline(client, matched, 'host');
+    } catch (e) { this._lobbyFailed(e, token); }
+  }
+
+  /** Code eingeben oder Einladungslink: dem Raum beitreten. */
+  async _onlineJoin(input) {
+    const code = normalizeCode(input);
+    const token = this._enterLobby(code ? `Runde ${code} wird angesteuert …` : 'Hafen wird angesteuert …', 'Einen Augenblick, Käpt\'n.');
+    if (!code) { this._lobbyFailed({ code: 'badCode' }, token); return; }
+    try {
+      const client = await this._connect(token);
+      const matched = await client.joinRoom(code);
+      await this._cp(token);
+      call(this.ctx.ui, 'showLobby', { phase: 'busy', title: `Du trittst ${genitive(matched.opponent)} Runde bei …`, text: 'Leinen los!', onCancel: this._toOnlineMenu });
+      await this._wait(1.2, token);
+      this._beginOnline(client, matched, 'guest');
+    } catch (e) { this._lobbyFailed(e, token); }
+  }
+
+  _lobbyFailed(e, token) {
+    if (e === CANCEL || token !== this._token) return;
+    if (!e || !e.code) console.error('[game] Fehler in der Lobby', e);
+    this.start({ notice: netErrorText(e && e.code), page: 'online' });
+  }
+
+  /** Gegner gefunden: Verbindung geht an den Netz-Gegner über, Platzierung beginnt. */
+  _beginOnline(client, { seat, name, opponent }, role) {
+    this._net = null; // gehört ab jetzt dem Netz-Gegner (wird mit ihm aufgeräumt)
+    this._resetGame();
+    this.mode = 'online';
+    this.names = { player: name, enemy: opponent };
+    this.opponent = new NetOpponent(client, seat, {
+      onGameOver: (msg) => this._onlineGameOver(msg),
+      onLost: () => { if (this.state !== 'gameover') this.start({ notice: netErrorText('lost') }); },
+    });
+    if (client.ended) { this._onlineGameOver(client.ended); return; } // Gegner schon wieder weg
+    this._enterPlacement('player');
+    if (role === 'host') call(this.ctx.ui, 'announce', `${opponent} ist an Bord!`, 'info');
   }
 
   // ------------------------------------------------------------------ Platzierung
@@ -251,7 +357,7 @@ export class GameController {
 
   // ------------------------------------------------------------------ Eingabe-Weiterleitung
   _onHover(cell) {
-    if (this._paused) return;
+    if (this._pauseMenu) return;
     const { boards, ui } = this.ctx;
     if (this.state === 'placement') {
       this._pl.hover = cell;
@@ -268,7 +374,7 @@ export class GameController {
   }
 
   _onSelect(cell) {
-    if (this._paused) return;
+    if (this._pauseMenu) return;
     if (this.state === 'placement') this._plClick(cell);
     else if (this.state === 'battle' && this._pending) {
       if (this.logic[this._aim].wasShot(cell.col, cell.row)) { call(this.ctx.audio, 'play', 'error'); return; }
@@ -281,25 +387,28 @@ export class GameController {
     }
   }
 
-  _onRotate() { if (!this._paused) this._plRotate(); }
+  _onRotate() { if (!this._pauseMenu) this._plRotate(); }
 
   // ------------------------------------------------------------------ Pause
   _togglePause() {
     const now = performance.now();
     if (now - this._lastPauseToggle < 200) return; // UI und Input melden ESC evtl. beide
     this._lastPauseToggle = now;
-    if (this._paused) { this._resume(); return; }
+    if (this._pauseMenu) { this._resume(); return; }
     if (this.state !== 'placement' && this.state !== 'battle') return;
-    this._paused = true;
+    const online = this.mode === 'online';
+    this._pauseMenu = true;
+    this._paused = !online; // online läuft die Partie weiter
     this._pauseStart = now;
     this.input.enabled = false;
-    call(this.ctx.ui, 'showPause', { onResume: () => this._resume(), onMenu: () => { this._paused = false; this.start(); } });
+    call(this.ctx.ui, 'showPause', { online, onResume: () => this._resume(), onMenu: () => this.start() });
   }
 
   _resume() {
-    if (!this._paused) return;
+    if (!this._pauseMenu) return;
+    this._pauseMenu = false;
+    if (this._paused) this.stats.startedAt += performance.now() - this._pauseStart;
     this._paused = false;
-    this.stats.startedAt += performance.now() - this._pauseStart;
     this.input.enabled = true;
     call(this.ctx.ui, 'hidePause');
     const w = this._resumeWaiters.splice(0);
@@ -354,6 +463,8 @@ export class GameController {
     const { ui, boards, fx, world } = this.ctx;
     this._token++;
     this._paused = false;
+    this._pauseMenu = false;
+    if (this._net) { const n = this._net; this._net = null; n.close(); }
     const w = this._resumeWaiters.splice(0);
     for (const r of w) r();
     if (this._pending) { const p = this._pending; this._pending = null; p.reject(CANCEL); }
@@ -373,7 +484,7 @@ export class GameController {
       call(b, 'setActive', false);
     }
     call(fx, 'clearAll');
-    for (const m of ['hideMainMenu', 'hidePlacement', 'hideHUD', 'hideGameOver', 'hidePause', 'hideCurtain']) call(ui, m);
+    for (const m of ['hideMainMenu', 'hidePlacement', 'hideHUD', 'hideGameOver', 'hidePause', 'hideCurtain', 'hideLobby']) call(ui, m);
     call(ui, 'setCoordinate', null);
     call(this.opponent, 'dispose');
     this.opponent = null;
@@ -466,8 +577,7 @@ export class GameController {
     const parts = shots.map((s) => {
       const where = label(s.col, s.row);
       if (s.result === 'miss') return `verfehlte bei ${where}`;
-      const f = FLEET[s.shipIndex];
-      return `${s.result === 'sunk' ? 'versenkte' : 'traf'} ${f.id === 'schoner' ? 'deinen' : 'deine'} ${f.name} (${where})`;
+      return `${s.result === 'sunk' ? 'versenkte' : 'traf'} ${yourShip(s.shipIndex)} (${where})`;
     });
     const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} und ${parts[parts.length - 1]}` : parts[0];
     return `${this.names[shooter]} ${list}`;
@@ -496,20 +606,23 @@ export class GameController {
 
     call(world, 'setMood', 'battle');
     call(audio, 'playMusic', 'battle');
-    call(ui, 'showHUD');
+    call(ui, 'showHUD', this.mode === 'online' ? { foe: this.names.enemy } : undefined);
     if (this.mode === 'hotseat') { this._hotseatLoop(token); return; }
-    this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
+    if (this.mode === 'ai') this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
     this._updateUI();
     this._battleLoop(token);
   }
 
   async _battleLoop(token) {
+    const { ui } = this.ctx, online = this.mode === 'online', foe = this.names.enemy;
     let errors = 0, first;
     try {
+      if (online) call(ui, 'setTurn', 'enemy', `Warte auf ${foe} …`);
       ({ first } = await this.opponent.submitFleet(fleetOf(this.logic.player)));
       await this._cp(token);
+      if (online) call(ui, 'announce', first === 'player' ? 'Du eröffnest das Feuer!' : `${foe} eröffnet das Feuer!`, 'turn');
     } catch (e) {
-      if (e !== CANCEL) { console.error('[game] Flotte konnte nicht übergeben werden', e); this.start(); }
+      if (e !== CANCEL && token === this._token) { console.error('[game] Flotte konnte nicht übergeben werden', e); this.start(); }
       return;
     }
     while (token === this._token) {
@@ -525,7 +638,7 @@ export class GameController {
           if (l === 'lost') { await this._gameOver(false, token); return; }
         }
       } catch (e) {
-        if (e === CANCEL) return;
+        if (e === CANCEL || token !== this._token) return; // abgebrochen (z. B. Spielende vom Server)
         console.error('[game] Fehler im Kampfablauf', e);
         if (++errors > 5) { console.error('[game] zu viele Fehler, zurück ins Menü'); this.start(); return; }
         this._pending = null;
@@ -567,10 +680,12 @@ export class GameController {
 
   async _enemyTurn(token) {
     const { ui, boards } = this.ctx;
-    call(ui, 'setTurn', 'enemy');
+    const foe = this.mode === 'online' ? this.names.enemy : null;
+    this.statsEnemy.turns++;
+    call(ui, 'setTurn', 'enemy', foe ? `${foe} zielt …` : undefined);
     call(boards.enemy, 'setActive', false);
     call(boards.player, 'setActive', true);
-    call(ui, 'announce', 'Der Feind ist am Zug', 'turn');
+    call(ui, 'announce', foe ? `${foe} ist am Zug` : 'Der Feind ist am Zug', 'turn');
     const shotP = this.opponent.nextShot();
     await this._camTo('player', 1.1, token);
     for (let shot = await shotP; ; shot = await this.opponent.nextShot()) {
@@ -629,11 +744,12 @@ export class GameController {
 
     // Ergebnis
     const mine = this.mode === 'hotseat' || shooter === 'player';
+    const foe = this.mode === 'online' ? this.names.enemy : null;
     if (res.result === 'miss') {
       call(fx, 'splash', target);
       call(audio, 'play', 'splash', { x: target.x });
       call(view, 'markMiss', col, row);
-      call(ui, 'announce', mine ? 'Daneben!' : 'Der Feind verfehlt!', 'miss');
+      call(ui, 'announce', mine ? 'Daneben!' : foe ? `${foe} verfehlt!` : 'Der Feind verfehlt!', 'miss');
       await this._wait(0.45, token);
       return res;
     }
@@ -647,7 +763,7 @@ export class GameController {
     this._startFire(tSide, col, row, ship, res.cellIndex, target);
 
     if (res.result === 'hit') {
-      call(ui, 'announce', mine ? 'Treffer!' : 'Wir wurden getroffen!', 'hit');
+      call(ui, 'announce', mine ? 'Treffer!' : foe ? `${foe} trifft ${yourShip(res.shipIndex)}!` : 'Wir wurden getroffen!', 'hit');
       await this._wait(0.55, token);
       return res;
     }
@@ -655,7 +771,7 @@ export class GameController {
     // Versenkt
     const info = this.logic[tSide].ships[res.shipIndex];
     const name = FLEET[res.shipIndex].name;
-    call(ui, 'announce', mine ? `${name} versenkt!` : `Unsere ${name} ist gesunken!`, 'sunk');
+    call(ui, 'announce', mine ? `${name} versenkt!` : foe ? `${foe} hat ${yourShip(res.shipIndex)} versenkt!` : `Unsere ${name} ist gesunken!`, 'sunk');
     await this._wait(0.5, token);
     this._stopShipFires(tSide, res.cells);
     if (!ship) { // Gegnerschiff wird erst beim Versenken bekannt
@@ -727,12 +843,36 @@ export class GameController {
   }
 
   // ------------------------------------------------------------------ Spielende
-  /** winner: Hot-Seat-Seite des Siegers. */
-  async _gameOver(won, token, winner) {
+  /**
+   * Spielende vom Server. Bei „alle versenkt“ hat der Client das Ende schon selbst erkannt (die Schüsse kommen
+   * vorher an); alle anderen Gründe brechen die laufende Sequenz ab.
+   */
+  _onlineGameOver(msg) {
+    if (msg.reason === 'allSunk' || this.state === 'gameover') return;
+    if (msg.winner === null) { // Abbruch während der Platzierung
+      this.start({ notice: { title: `${this.names.enemy} hat abgelegt`, text: 'Die Partie ist geplatzt, bevor ein Schuss fiel.' }, page: 'online' });
+      return;
+    }
+    const token = ++this._token;
+    if (this._pending) { const p = this._pending; this._pending = null; p.reject(CANCEL); }
+    this._pauseMenu = false;
+    this._paused = false;
+    this.input.enabled = true;
+    const { ui, boards } = this.ctx;
+    call(ui, 'hidePause');
+    call(ui, 'hidePlacement');
+    call(boards.player, 'hideGhost');
+    call(boards.enemy, 'setHover', 0, 0, null);
+    this._gameOver(msg.winner === this.opponent.seat, token, null, msg.reason).catch(ignoreCancel);
+  }
+
+  /** winner: Hot-Seat-Seite des Siegers; reason: Online-Grund des Spielendes. */
+  async _gameOver(won, token, winner, reason = 'allSunk') {
     const { world, audio, fx, ui, boards } = this.ctx;
-    const hs = this.mode === 'hotseat';
+    const hs = this.mode === 'hotseat', online = this.mode === 'online';
     this.state = 'gameover';
     if (hs) this._showShips('all');
+    if (this._pauseMenu) { this._pauseMenu = false; this._paused = false; this.input.enabled = true; call(ui, 'hidePause'); }
     this._readyWaiters.splice(0).forEach((r) => r());
     this.input.setBoard(null);
     call(boards.player, 'setActive', false);
@@ -754,15 +894,20 @@ export class GameController {
     call(ui, 'hideHUD');
     const durationSec = Math.round((performance.now() - startedAt) / 1000);
     const sum = (st) => ({ shots: st.shots, hits: st.hits, accuracy: st.shots ? st.hits / st.shots : 0, turns: st.turns });
+    if (online) winner = won ? 'player' : 'enemy';
+    const restart = hs ? () => this._beginHotseat([this.names.player, this.names.enemy])
+      : online ? null // Revanche folgt mit Etappe 6
+        : () => this._beginPlacement(this.difficulty);
     call(ui, 'showGameOver', {
       won,
       stats: { shots, hits, accuracy: shots ? hits / shots : 0, turns, durationSec },
-      ...(hs && {
+      ...((hs || online) && {
         winnerName: this.names[winner],
         players: ['player', 'enemy'].map((side) => ({ name: this.names[side], winner: side === winner, ...sum(this._statsOf(side)) })),
       }),
-      onRestart: hs ? () => this._beginHotseat([this.names.player, this.names.enemy]) : () => this._beginPlacement(this.difficulty),
-      onMenu: () => this.start(),
+      ...(online && { ...gameOverText(reason, won, this.names.enemy), reason }),
+      onRestart: restart,
+      onMenu: () => this.start(online ? { page: 'online' } : undefined),
     });
   }
 

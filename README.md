@@ -7,14 +7,15 @@ Alle Grafiken, Texturen, Modelle, Sounds und die Musik werden zur Laufzeit proze
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5173 – startet auch den Spielserver (Online, über /ws)
 npm run build      # Produktions-Build nach dist/
 npm run preview
-npm run server     # Spielserver für Online (Port 8787, siehe server/main.js)
+npm run server     # Spielserver einzeln (Port 8787, siehe server/main.js)
 ```
 
 URL-Parameter:
 - `?fps` blendet FPS, Draw-Calls und Dreiecke ein.
+- `?join=CODE` tritt direkt einer Online-Runde bei (Einladungslink).
 - `?quality=low|medium|high` erzwingt eine Grafikstufe. Standard ist automatische Erkennung; die Auflösung passt sich zusätzlich dynamisch an, um 60 fps zu halten.
 
 ## Spielregeln

@@ -79,3 +79,9 @@ export const globe = (cls = '') => svg('0 0 100 100', `<g fill="none" stroke="cu
 export const flag = (cls = '') => svg('0 0 100 100', `<g stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="10" x2="22" y2="92"/>
 <path d="M22 14c16-8 28 8 44 0s14-4 18-6v40c-4 2-6 0-18 6s-28-8-44 0z" fill="currentColor" fill-opacity=".35"/></g>`, cls);
 export const swords = sabre;
+/** Kettenglieder (Link kopieren). */
+export const link = (cls = '') => svg('0 0 100 100', `<g fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round"><path d="M44 58a16 16 0 0 0 22 2l14-14a16 16 0 0 0-22-22l-6 6"/><path d="M56 42a16 16 0 0 0-22-2L20 54a16 16 0 0 0 22 22l6-6"/></g>`, cls);
+/** Teilen (drei verbundene Punkte). */
+export const share = (cls = '') => svg('0 0 100 100', `<g fill="currentColor"><circle cx="74" cy="22" r="12"/><circle cx="26" cy="50" r="12"/><circle cx="74" cy="78" r="12"/></g><g stroke="currentColor" stroke-width="7"><line x1="64" y1="28" x2="36" y2="44"/><line x1="36" y1="56" x2="64" y2="72"/></g>`, cls);
+/** Schlüssel (Code eingeben). */
+export const key = (cls = '') => svg('0 0 100 100', `<g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><circle cx="30" cy="50" r="16"/><path d="M46 50h44M78 50v14M66 50v10"/></g>`, cls);

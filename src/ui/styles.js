@@ -111,6 +111,21 @@ background:radial-gradient(ellipse at 50% 40%,#2a1709 0%,#120904 70%,#080402 100
 .fb-curtain .sb{font-style:italic;color:#5a4128;font-size:15px}
 .fb-curtain .btn{width:100%;overflow-wrap:anywhere}
 
+/* ---------- Online: Menü-Code, Lobby ---------- */
+.fb-menu .code-in{text-transform:uppercase;text-align:center;font-size:28px;letter-spacing:.3em;font-weight:900}
+.fb-menu .err{color:var(--red);font-weight:700;font-size:14px;text-align:center;min-height:1.2em;margin-top:-6px}
+.fb-lobby{z-index:64;align-items:center;justify-content:center;padding:12px;pointer-events:auto;background:radial-gradient(ellipse at 50% 45%,rgba(10,6,3,.45),rgba(6,3,2,.82))}
+.fb-lobby .pnl{width:min(94vw,480px);max-height:calc(100% - 8px);overflow:auto;padding:22px 24px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
+.fb-lobby .art{width:72px;height:72px;font-size:72px;color:#6b4510}
+.fb-lobby .art.spin{animation:fb-spin 6s linear infinite}
+.fb-lobby h2{font-size:clamp(22px,4.2vh,30px);line-height:1.15;font-weight:900;color:#5a3010;overflow-wrap:anywhere}
+.fb-lobby .sb{font-style:italic;color:#5a4128;font-size:15px}
+.fb-lobby .code{font-family:'Pirata One',var(--serif);font-size:clamp(56px,12vh,88px);line-height:1;letter-spacing:.2em;padding-left:.2em;color:#3a1d08;user-select:text;-webkit-user-select:text}
+.fb-lobby .lnk{width:100%;height:40px;padding:0 10px;border-radius:8px;border:2px solid #6b4a22;background:rgba(255,250,232,.85);color:var(--ink);font:14px var(--serif);text-align:center;pointer-events:auto;user-select:text;-webkit-user-select:text}
+.fb-lobby .acts{display:flex;gap:8px;width:100%;flex-wrap:wrap}
+.fb-lobby .acts .btn{flex:1 1 140px;font-size:16px}
+.fb-lobby .pnl > .btn{width:100%}
+
 /* ---------- Modale (Einstellungen, Anleitung, Pause) ---------- */
 .fb-modal{z-index:60;align-items:center;justify-content:center;padding:12px;background:rgba(8,4,2,.72);pointer-events:auto}
 .fb-modal .pnl{width:min(94vw,520px);max-height:calc(100% - 8px);overflow:auto;padding:22px 24px 20px;display:flex;flex-direction:column;gap:14px;transform:translateY(14px) scale(.97);transition:transform .3s cubic-bezier(.2,.9,.3,1.2);overscroll-behavior:contain}

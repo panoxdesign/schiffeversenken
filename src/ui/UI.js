@@ -1,8 +1,8 @@
-// HTML/CSS-Overlay: Laden, Hauptmenü, Platzierung, HUD, Banner, Sichtschutz, Game Over, Pause, Einstellungen.
+// HTML/CSS-Overlay: Laden, Hauptmenü, Online-Lobby, Platzierung, HUD, Banner, Sichtschutz, Game Over, Pause, Einstellungen.
 import { CSS } from './styles.js';
 import * as I from './icons.js';
 import { DIFFICULTIES, FLEET, QUALITY_PRESETS } from '../config.js';
-import { MAX_NAME_LENGTH, sanitizeName } from '../../shared/protocol.js';
+import { MAX_NAME_LENGTH, CODE_LENGTH, sanitizeName, normalizeCode } from '../../shared/protocol.js';
 import { randomPirateName } from '../../shared/names.js';
 
 const DIFF_ICON = { easy: 'boat', normal: 'anchor', hard: 'skull' };
@@ -79,7 +79,7 @@ export class UI {
       if (this._isOpen(this._settings)) return this.hideSettings();
       if (this._isOpen(this._help)) return this.hideHelp();
       if (this._isOpen(this._pause)) { if (this._cb.pause && this._cb.pause.onResume) this._cb.pause.onResume(); return; }
-      if (this._isOpen(this._menu) || this._isOpen(this._over) || this._isOpen(this._curtain) || (this._load && !this._load.hidden)) return;
+      if (this._isOpen(this._menu) || this._isOpen(this._over) || this._isOpen(this._curtain) || this._isOpen(this._lobby) || (this._load && !this._load.hidden)) return;
       if (this.onPauseRequested) this.onPauseRequested();
     });
   }
@@ -117,9 +117,12 @@ export class UI {
   }
 
   /* ------------------------------------------------------------------ Hauptmenü */
-  /** onStart(difficulty): gegen die KI; onHotseat([name1, name2]): zu zweit an einem Gerät. */
-  showMainMenu({ onStart, onHotseat } = {}) {
-    this._cb.start = onStart; this._cb.hotseat = onHotseat;
+  /**
+   * onStart(difficulty): gegen die KI; onHotseat([name1, name2]): zu zweit an einem Gerät;
+   * onInvite(): Freund einladen; onJoin(code): Code eingeben. page: Startseite ('main' | 'online' | …).
+   */
+  showMainMenu({ onStart, onHotseat, onInvite, onJoin, page = 'main' } = {}) {
+    this._cb.start = onStart; this._cb.hotseat = onHotseat; this._cb.invite = onInvite; this._cb.join = onJoin;
     if (!this._menu) {
       const n = this._menu = this._screen('fb-menu');
       const diffs = Object.entries(DIFFICULTIES).map(([k, d]) =>
@@ -131,14 +134,23 @@ export class UI {
         <div class="page" data-page="main"><label class="nm-lbl">Dein Piratenname</label>${nameField('me', 'Dein Piratenname')}
           <div class="modes"><button class="btn mode" data-go="ai" data-focus>${I.skull()}<span>Gegen die KI</span></button>
           <button class="btn mode" data-go="hotseat">${I.people()}<span>Zu zweit an einem Gerät</span></button>
-          <button class="btn mode" disabled title="Kommt bald">${I.globe()}<span>Online</span><small>Der Hafen wird noch gebaut</small></button></div>
+          <button class="btn mode" data-go="online">${I.globe()}<span>Online</span></button></div>
           <div class="row"><button class="btn ghost" data-act="settings">${I.cog()}Einstellungen</button><button class="btn ghost" data-act="help">${I.book()}Anleitung</button></div></div>
         <div class="page" data-page="ai" hidden><h3>Wähle deinen Gegner</h3><div class="diffs" role="radiogroup" aria-label="Schwierigkeit">${diffs}</div>
           <button class="btn primary go" data-focus>${I.sabre()}In See stechen</button><button class="btn ghost back">Zurück</button></div>
         <div class="page" data-page="hotseat" hidden><h3>Zwei Käpt'ns, ein Gerät</h3>
           <label class="nm-lbl">Spieler 1 (linkes Meer)</label>${nameField('p1', 'Name Spieler 1')}
           <label class="nm-lbl">Spieler 2 (rechtes Meer)</label>${nameField('p2', 'Name Spieler 2')}
-          <button class="btn primary hs-go" data-focus>${I.sabre()}Leinen los!</button><button class="btn ghost back">Zurück</button></div></div>`;
+          <button class="btn primary hs-go" data-focus>${I.sabre()}Leinen los!</button><button class="btn ghost back">Zurück</button></div>
+        <div class="page" data-page="online" hidden><h3>Auf hoher See</h3><div class="modes">
+          <button class="btn mode" data-on="invite" data-focus>${I.link()}<span>Freund einladen</span></button>
+          <button class="btn mode" data-go="join">${I.key()}<span>Code eingeben</span></button>
+          <button class="btn mode" disabled>${I.flag()}<span>Zufälliger Gegner</span><small>Kommt bald</small></button></div>
+          <button class="btn ghost back">Zurück</button></div>
+        <div class="page" data-page="join" hidden><h3>Code eingeben</h3>
+          <input class="nm-in code-in" type="text" maxlength="${CODE_LENGTH}" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Code der Runde" placeholder="K7QX" data-focus>
+          <p class="err" role="alert"></p>
+          <button class="btn primary join-go">${I.anchor()}An Bord gehen</button><button class="btn ghost back" data-back="online">Zurück</button></div></div>`;
       this._mn = { pages: [...n.querySelectorAll('.page')], inputs: {} };
       n.querySelectorAll('.nm-in').forEach((inp) => { this._mn.inputs[inp.dataset.n] = inp; });
       const me = this._mn.inputs.me;
@@ -149,7 +161,17 @@ export class UI {
         if (d) { const inp = this._mn.inputs[d.dataset.dice]; inp.value = randomPirateName(); if (d.dataset.dice === 'me') this._setPlayerName(inp.value); }
       });
       n.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => this._menuPage(b.dataset.go)));
-      n.querySelectorAll('.back').forEach((b) => b.addEventListener('click', () => this._menuPage('main')));
+      n.querySelectorAll('.back').forEach((b) => b.addEventListener('click', () => this._menuPage(b.dataset.back || 'main')));
+      n.querySelector('[data-on=invite]').addEventListener('click', () => { this._snd('bell', { volume: 0.5 }); this._cb.invite && this._cb.invite(); });
+      const codeIn = this._mn.code = n.querySelector('.code-in'), err = n.querySelector('.err');
+      const join = () => {
+        const code = normalizeCode(codeIn.value);
+        if (!code) { err.textContent = `Ein Code hat ${CODE_LENGTH} Zeichen (ohne 0, O, 1, I, L).`; this._snd('error'); return; }
+        err.textContent = ''; this._snd('bell', { volume: 0.5 }); this._cb.join && this._cb.join(code);
+      };
+      codeIn.addEventListener('input', () => { codeIn.value = codeIn.value.toUpperCase().replace(/\s/g, ''); err.textContent = ''; });
+      codeIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+      n.querySelector('.join-go').addEventListener('click', join);
       n.querySelector('.diffs').addEventListener('click', (e) => { const b = e.target.closest('.diff'); if (b) this._setDifficulty(b.dataset.k); });
       n.querySelector('.go').addEventListener('click', () => { this._snd('bell', { volume: 0.5 }); this._cb.start && this._cb.start(this._difficulty); });
       n.querySelector('.hs-go').addEventListener('click', () => {
@@ -161,8 +183,8 @@ export class UI {
       n.querySelector('[data-act=help]').addEventListener('click', () => this.showHelp());
       this._setDifficulty(this._difficulty, true);
     }
-    this._menuPage('main', true);
-    this._show(this._menu); this._focus(this._menu);
+    this._menuPage(page, true);
+    this._show(this._menu); this._focus(this._mn.pages.find((p) => !p.hidden) || this._menu);
     if (this.audio) this.audio.playMusic('menu');
   }
   hideMainMenu() { if (this._menu) this._hide(this._menu); }
@@ -238,6 +260,53 @@ export class UI {
   }
   hideHelp() { if (this._help) { this._hide(this._help); this._unfocus(); } }
 
+  /* ------------------------------------------------------------------ Online-Lobby */
+  /**
+   * Ein Overlay für alle Lobby-Zustände.
+   * phase 'busy': title, text, Abbrechen · 'invite': code, link (Kopieren/Teilen), Abbrechen ·
+   * 'notice': title, text, optional action { label, onClick }, Zurück.
+   */
+  showLobby({ phase = 'busy', title = '', text = '', code = '', link = '', action = null, onCancel } = {}) {
+    this._cb.lobby = { onCancel, action };
+    if (!this._lobby) {
+      const n = this._lobby = this._screen('fb-lobby');
+      n.addEventListener('click', (e) => {
+        const b = e.target.closest('button'); if (!b) return; const c = this._cb.lobby || {};
+        if (b.dataset.a === 'cancel') c.onCancel && c.onCancel();
+        else if (b.dataset.a === 'action') c.action && c.action.onClick && c.action.onClick();
+        else if (b.dataset.a === 'copy') this._copyLink(b);
+        else if (b.dataset.a === 'share') this._shareLink();
+      });
+    }
+    const n = this._lobby;
+    this._lobbyLink = { code, link };
+    const invite = phase === 'invite', notice = phase === 'notice';
+    const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    const body = invite
+      ? `<div class="art">${I.globe()}</div><h2>Lade einen Freund ein</h2><p class="sb">Nenne diesen Code oder schick den Link:</p>
+        <div class="code" aria-label="Code ${esc(code.split('').join(' '))}">${esc(code)}</div>
+        <input class="lnk" type="text" readonly value="${esc(link)}" aria-label="Einladungslink">
+        <div class="acts"><button class="btn" data-a="copy">${I.link()}<span>Link kopieren</span></button>${canShare ? `<button class="btn" data-a="share">${I.share()}<span>Teilen</span></button>` : ''}</div>
+        <p class="sb">Warte auf deinen Gast …</p>`
+      : `<div class="art ${notice ? '' : 'spin'}">${notice ? I.skull() : I.wheel()}</div><h2>${esc(title)}</h2>${text ? `<p class="sb">${esc(text)}</p>` : ''}
+        ${action ? `<button class="btn primary" data-a="action" data-focus>${esc(action.label)}</button>` : ''}`;
+    n.innerHTML = `<div class="pnl parch" role="dialog" aria-modal="true" aria-label="${esc(invite ? 'Einladung' : title)}">${body}
+      <button class="btn ${notice && !action ? 'primary' : 'ghost'}" data-a="cancel" ${notice && !action ? 'data-focus' : ''}>${notice ? 'Zurück' : 'Abbrechen'}</button></div>`;
+    this._show(n); this._focus(n);
+  }
+  hideLobby() { if (this._lobby) this._hide(this._lobby); }
+  async _copyLink(btn) {
+    const { link } = this._lobbyLink || {}; if (!link) return;
+    const label = btn.querySelector('span');
+    try { await navigator.clipboard.writeText(link); label.textContent = 'Kopiert!'; }
+    catch { const inp = this._lobby.querySelector('.lnk'); inp.focus(); inp.select(); label.textContent = 'Markiert – kopieren!'; }
+    this._later('copied', () => { label.textContent = 'Link kopieren'; }, 1800);
+  }
+  _shareLink() {
+    const { code, link } = this._lobbyLink || {}; if (!link) return;
+    navigator.share({ title: 'Freibeuter', text: `Komm an Bord und fordere mich heraus! Code: ${code}`, url: link }).catch(() => {});
+  }
+
   /* ------------------------------------------------------------------ Platzierung */
   showPlacement({ fleet, onSelectShip, onRotate, onRandom, onClear, onConfirm } = {}) {
     this._cb.place = { onSelectShip, onRotate, onRandom, onClear, onConfirm };
@@ -280,7 +349,8 @@ export class UI {
   hidePlacement() { if (this._place) this._hide(this._place); }
 
   /* ------------------------------------------------------------------ HUD */
-  showHUD() {
+  /** foe: optionaler Gegnername (online) für die Überschrift der feindlichen Flotte. */
+  showHUD({ foe } = {}) {
     if (!this._hud) {
       const n = this._hud = this._screen('fb-hud');
       n.innerHTML = `<div class="top"><button class="btn ibtn ghost pz" aria-label="Pause">${I.wheel()}</button>
@@ -295,6 +365,7 @@ export class UI {
       n.querySelectorAll('[data-s]').forEach((b) => { this._hd.stat[b.dataset.s] = b; });
       this._hd.turnKey = null; this._hd.coordT = null;
     }
+    this._hud.querySelector('.foe h4').textContent = foe ? `Flotte von ${foe}` : 'Feindliche Flotte';
     this._show(this._hud);
   }
   hideHUD() { if (this._hud) this._hide(this._hud); }
@@ -385,8 +456,11 @@ export class UI {
   hideCurtain() { if (this._curtain) this._hide(this._curtain, 300); }
 
   /* ------------------------------------------------------------------ Game Over */
-  /** Hot-Seat zusätzlich: winnerName und players [{ name, winner, shots, hits, accuracy, turns }] (beide Seiten). */
-  showGameOver({ won = false, stats = {}, winnerName, players, onRestart, onMenu } = {}) {
+  /**
+   * Hot-Seat/online zusätzlich: winnerName und players [{ name, winner, shots, hits, accuracy, turns }] (beide Seiten).
+   * Online: `reason` ist gesetzt, `title`/`sub` ersetzen die Standardtexte. Ohne onRestart kein Neustart-Knopf.
+   */
+  showGameOver({ won = false, stats = {}, winnerName, players, title: customTitle, sub: customSub, reason, onRestart, onMenu } = {}) {
     this._cb.over = { onRestart, onMenu };
     if (!this._over) {
       const n = this._over = this._screen('fb-over');
@@ -398,8 +472,9 @@ export class UI {
     const n = this._over; n.classList.toggle('lose', !won); n.classList.toggle('win', !!won);
     const g = (l, v) => `<div><span>${l}</span><b>${v}</b></div>`;
     const duel = Array.isArray(players) && players.length === 2;
-    const title = duel ? `Sieg für ${esc(winnerName)}!` : won ? 'Sieg! Die Meere gehören dir!' : "Ab zu Davy Jones' Kiste …";
-    const sub = duel ? 'Beide Flotten sind aufgedeckt. Die Beute geht an die siegreiche Mannschaft!'
+    const online = reason !== undefined;
+    const title = customTitle ? esc(customTitle) : duel && !online ? `Sieg für ${esc(winnerName)}!` : won ? 'Sieg! Die Meere gehören dir!' : "Ab zu Davy Jones' Kiste …";
+    const sub = customSub ? esc(customSub) : duel && !online ? 'Beide Flotten sind aufgedeckt. Die Beute geht an die siegreiche Mannschaft!'
       : won ? 'Die feindliche Flotte liegt auf dem Meeresgrund. Die Beute gehört dir, Käpt\'n!' : 'Deine Flotte ruht nun bei den Fischen. Aber ein echter Pirat gibt niemals auf!';
     const table = duel ? `<table class="duel"><thead><tr><th></th>${players.map((p) => `<th class="${p.winner ? 'win' : ''}">${p.winner ? I.check() : ''}${esc(p.name)}</th>`).join('')}</tr></thead><tbody>
       ${[['Schüsse', (p) => p.shots | 0], ['Treffer', (p) => p.hits | 0], ['Quote', (p) => fmtPct(p.accuracy)], ['Runden', (p) => p.turns | 0]]
@@ -411,7 +486,7 @@ export class UI {
       <h2>${title}</h2>
       <p class="sb">${sub}</p>
       ${table}
-      <div class="btns"><button class="btn primary" data-a="again" data-focus>${duel ? 'Revanche' : 'Neue Partie'}</button><button class="btn" data-a="menu">Hauptmenü</button></div></div>`;
+      <div class="btns">${onRestart ? `<button class="btn primary" data-a="again" data-focus>${duel ? 'Revanche' : 'Neue Partie'}</button>` : ''}<button class="btn ${onRestart ? '' : 'primary'}" data-a="menu" ${onRestart ? '' : 'data-focus'}>Hauptmenü</button></div></div>`;
     if (won) { // einmaliger Münzregen (transform/opacity, danach entfernt)
       const pnl = n.querySelector('.pnl'); let h = '';
       for (let i = 0; i < 18; i++) h += `<span class="coin" style="left:${Math.round(Math.random() * 96)}%;--dx:${Math.round(Math.random() * 120 - 60)}px;animation-delay:${(Math.random() * 1.6).toFixed(2)}s;animation-duration:${(2.2 + Math.random() * 1.4).toFixed(2)}s">${I.coin()}</span>`;
@@ -423,18 +498,27 @@ export class UI {
   hideGameOver() { if (this._over) this._hide(this._over); }
 
   /* ------------------------------------------------------------------ Pause */
-  showPause({ onResume, onMenu } = {}) {
+  /** online: Hinweis, dass die Partie weiterläuft. */
+  showPause({ onResume, onMenu, online = false } = {}) {
     this._cb.pause = { onResume, onMenu };
     if (!this._pause) {
       const n = this._pause = this._screen('fb-modal fb-pause');
       n.innerHTML = `<div class="pnl parch" role="dialog" aria-modal="true" aria-label="Pause"><div class="pw">${I.wheel()}</div><h2>Pause</h2>
-        <p class="note" style="text-align:center">Die Flotte hält inne, Käpt'n.</p>
+        <p class="note pn" style="text-align:center"></p>
         <button class="btn primary" data-a="resume" data-focus>Weiter</button><button class="btn" data-a="set">${I.cog()}Einstellungen</button><button class="btn" data-a="menu">Hauptmenü</button></div>`;
       n.addEventListener('click', (e) => {
         const b = e.target.closest('button'); if (!b) return; const c = this._cb.pause || {};
-        if (b.dataset.a === 'resume') c.onResume && c.onResume(); else if (b.dataset.a === 'menu') c.onMenu && c.onMenu(); else if (b.dataset.a === 'set') this.showSettings();
+        if (b.dataset.a === 'resume') c.onResume && c.onResume();
+        else if (b.dataset.a === 'menu') {
+          if (this._pauseOnline && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Wirklich? Zählt als Aufgabe'; return; }
+          c.onMenu && c.onMenu();
+        } else if (b.dataset.a === 'set') this.showSettings();
       });
     }
+    this._pauseOnline = online;
+    const menuBtn = this._pause.querySelector('[data-a=menu]');
+    delete menuBtn.dataset.armed; menuBtn.textContent = 'Hauptmenü';
+    this._pause.querySelector('.pn').textContent = online ? 'Achtung: Online läuft die Partie weiter, Käpt\'n!' : "Die Flotte hält inne, Käpt'n.";
     this._show(this._pause); this._focus(this._pause);
   }
   hidePause() { if (this._pause) { this._hide(this._pause); this._unfocus(); } }

@@ -296,7 +296,7 @@ Fortschritt hier abhaken:
 - [x] Etappe 1 – Umbau
 - [x] Etappe 2 – Hot-Seat
 - [x] Etappe 3 – Server-Kern
-- [ ] Etappe 4 – Online mit Freunden
+- [x] Etappe 4 – Online mit Freunden (E2E-In-Memory-Test grün; Partie mit zwei echten Browsern noch manuell prüfen)
 - [ ] Etappe 4a – Deployment
 - [ ] Etappe 5 – Robustheit
 - [ ] Etappe 6 – Zufallsgegner & Extras
