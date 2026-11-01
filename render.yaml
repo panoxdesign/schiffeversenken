@@ -1,0 +1,14 @@
+# Render-Blueprint: Spielserver („Hafen“) als Free-Web-Service.
+# Render setzt PORT selbst; der Server lauscht auf 0.0.0.0 (server/main.js).
+# ALLOWED_ORIGINS im Render-Dashboard eintragen: die Client-Adresse(n), z. B. https://schiffeversenken.vercel.app
+services:
+  - type: web
+    name: freibeuter-hafen
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm run server
+    healthCheckPath: /health
+    envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false

@@ -23,6 +23,11 @@ export function takeJoinCode(loc = globalThis.location, history = globalThis.his
   return code;
 }
 
+/** Weck-Ping-Adresse: VITE_SERVER_URL bzw. derselbe Host, Pfad /health. */
+export function serverHealthUrl(serverUrl, loc = globalThis.location) {
+  return new URL('/health', serverUrl || loc.href).toString();
+}
+
 /** WebSocket-Adresse: VITE_SERVER_URL (http[s]://…) oder derselbe Host unter /ws (Dev: Vite-Proxy). */
 export function serverWsUrl(serverUrl, loc = globalThis.location) {
   const u = serverUrl ? new URL('/ws', serverUrl) : new URL('/ws', loc.href);

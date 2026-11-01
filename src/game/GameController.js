@@ -8,6 +8,7 @@ import { AIOpponent } from './opponents/AIOpponent.js';
 import { NetClient } from '../net/NetClient.js';
 import { NetOpponent } from '../net/NetOpponent.js';
 import { inviteLink } from '../net/link.js';
+import { watchHarbor } from '../net/harbor.js';
 import { genitive, yourShip, netErrorText, gameOverText } from './onlineTexts.js';
 import { Input } from './Input.js';
 
@@ -45,6 +46,14 @@ export class GameController {
     this._paused = false; // Abläufe angehalten (nicht online)
     this._pauseMenu = false; // Pausenmenü offen (online läuft das Spiel dabei weiter)
     this._net = null; // Online: Verbindung während der Lobby (danach gehört sie dem NetOpponent)
+    // Weck-Ping zum Spielserver, sobald das Hauptmenü öffnet (nur wenn das Netz einen Health-Check anbietet)
+    this._harbor = ctx.net && typeof ctx.net.health === 'function'
+      ? watchHarbor({
+        ping: () => ctx.net.health(),
+        offline: () => globalThis.navigator?.onLine === false,
+        onStatus: (s) => call(ctx.ui, 'setHarbor', s),
+      })
+      : null;
     this._resumeWaiters = [];
     this._lastPauseToggle = 0;
     this._timeScale = 1; // nur für Debug/Tests
@@ -107,6 +116,10 @@ export class GameController {
       onInvite: () => this._onlineInvite(),
       onJoin: (code) => this._onlineJoin(code),
     });
+    if (this._harbor) {
+      call(ui, 'setHarbor', this._harbor.status);
+      this._harbor.check();
+    }
     if (notice) this._notice(notice);
     if (join != null) this._onlineJoin(join);
   }

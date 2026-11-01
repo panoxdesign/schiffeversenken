@@ -1,15 +1,12 @@
 // Echte Uhr und kryptografischer Zufall für den Produktivbetrieb.
 // Der Server-Kern bekommt beides injiziert; Tests nutzen eine vorspulbare Uhr und seedbaren Zufall.
 import { webcrypto } from 'node:crypto';
+import { systemClock } from '../shared/clock.js';
 
-/** @typedef {{ now(): number, setTimeout(fn: () => void, ms: number): any, clearTimeout(handle: any): void }} Clock */
+/** @typedef {import('../shared/clock.js').Clock} Clock */
 
 /** @type {Clock} */
-export const realClock = {
-  now: () => Date.now(),
-  setTimeout: (fn, ms) => setTimeout(fn, ms),
-  clearTimeout: (handle) => clearTimeout(handle),
-};
+export const realClock = systemClock;
 
 /** Gleichverteilte Zahl in [0, 1) aus kryptografischem Zufall (Raum-Codes und Tokens dürfen nicht erratbar sein). */
 export function cryptoRng() {

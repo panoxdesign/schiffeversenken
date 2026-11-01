@@ -209,3 +209,17 @@ test('Online: Gastgeber legt ab, während der Gast noch beitritt -> klare Meldun
   assert.equal(shown(guest, 'showLobby').title, 'Rotbart hat abgelegt');
   assert.equal(guest.gc.state, 'menu');
 });
+
+test('Hauptmenü weckt den Hafen und zeigt seinen Zustand', async () => {
+  const m = makeCtx();
+  let pings = 0;
+  m.ctx.net = { connect: async () => { throw new Error('nicht gebraucht'); }, health: async () => { pings++; return { ok: true, players: 0 }; } };
+  const gc = new GameController(m.ctx);
+  gc.start();
+  await until(() => m.ctx.ui.last?.setHarbor === 'ready');
+  assert.equal(m.ctx.ui.last.setHarbor, 'ready');
+  assert.equal(pings, 1);
+  gc.start(); // gleich wieder im Menü: noch frisch, kein neuer Ping
+  assert.equal(pings, 1);
+  assert.equal(m.ctx.ui.last.setHarbor, 'ready', 'Menü bekommt den bekannten Zustand');
+});

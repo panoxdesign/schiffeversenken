@@ -9,7 +9,8 @@ import { AudioEngine } from './audio/AudioEngine.js';
 import { UI } from './ui/UI.js';
 import { GameController } from './game/GameController.js';
 import { openWebSocket } from './net/WebSocketTransport.js';
-import { serverWsUrl, takeJoinCode } from './net/link.js';
+import { serverWsUrl, serverHealthUrl, takeJoinCode } from './net/link.js';
+import { fetchHealth } from './net/harbor.js';
 
 async function boot() {
   const engine = new Engine(document.getElementById('app'));
@@ -34,8 +35,12 @@ async function boot() {
   ui.showLoading(0.8);
   await nextFrame();
 
-  // Online: Spielserver unter VITE_SERVER_URL bzw. im Dev über den Vite-Proxy (/ws) auf demselben Host.
-  const net = { connect: () => openWebSocket(serverWsUrl(import.meta.env.VITE_SERVER_URL)) };
+  // Online: Spielserver unter VITE_SERVER_URL bzw. im Dev über den Vite-Proxy (/ws, /health) auf demselben Host.
+  const serverUrl = import.meta.env.VITE_SERVER_URL;
+  const net = {
+    connect: () => openWebSocket(serverWsUrl(serverUrl)),
+    health: () => fetchHealth(serverHealthUrl(serverUrl)),
+  };
   const join = takeJoinCode(); // Einladungslink ?join=CODE – sofort aus der Adresse entfernen
   const controller = new GameController({ engine, world, boards, shipFactory, fx, cameraRig, audio, ui, net });
 

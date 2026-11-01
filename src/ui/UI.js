@@ -134,7 +134,7 @@ export class UI {
         <div class="page" data-page="main"><label class="nm-lbl">Dein Piratenname</label>${nameField('me', 'Dein Piratenname')}
           <div class="modes"><button class="btn mode" data-go="ai" data-focus>${I.skull()}<span>Gegen die KI</span></button>
           <button class="btn mode" data-go="hotseat">${I.people()}<span>Zu zweit an einem Gerät</span></button>
-          <button class="btn mode" data-go="online">${I.globe()}<span>Online</span></button></div>
+          <button class="btn mode online" data-go="online">${I.globe()}<span>Online</span><small hidden></small></button></div>
           <div class="row"><button class="btn ghost" data-act="settings">${I.cog()}Einstellungen</button><button class="btn ghost" data-act="help">${I.book()}Anleitung</button></div></div>
         <div class="page" data-page="ai" hidden><h3>Wähle deinen Gegner</h3><div class="diffs" role="radiogroup" aria-label="Schwierigkeit">${diffs}</div>
           <button class="btn primary go" data-focus>${I.sabre()}In See stechen</button><button class="btn ghost back">Zurück</button></div>
@@ -182,12 +182,21 @@ export class UI {
       n.querySelector('[data-act=settings]').addEventListener('click', () => this.showSettings());
       n.querySelector('[data-act=help]').addEventListener('click', () => this.showHelp());
       this._setDifficulty(this._difficulty, true);
+      this._applyHarbor();
     }
     this._menuPage(page, true);
     this._show(this._menu); this._focus(this._mn.pages.find((p) => !p.hidden) || this._menu);
     if (this.audio) this.audio.playMusic('menu');
   }
   hideMainMenu() { if (this._menu) this._hide(this._menu); }
+  /** Zustand des Spielservers: 'unknown' | 'waking' | 'ready' | 'down' (dann ist Online ausgegraut). */
+  setHarbor(status) { this._harbor = status; this._applyHarbor(); }
+  _applyHarbor() {
+    const b = this._menu && this._menu.querySelector('.mode.online'); if (!b) return;
+    const down = this._harbor === 'down', hint = down ? 'Hafen nicht erreichbar' : this._harbor === 'waking' ? 'Hafen erwacht …' : '';
+    b.disabled = down;
+    const s = b.querySelector('small'); s.textContent = hint; s.hidden = !hint;
+  }
   _menuPage(page, silent) {
     const m = this._mn;
     if (page === 'hotseat') {
