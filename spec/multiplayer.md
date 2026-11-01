@@ -308,6 +308,10 @@ Fortschritt hier abhaken:
 - **Schadensdarstellung:** Schiffsschaden wird bisher nur auf der Spielerseite visuell angewendet; im Hot-Seat muss das für beide Seiten gelten.
 - **Kameraperspektive Spieler 2:** Die vorhandenen Ansichten blicken von der Spielerseite; prüfen, ob die Ansicht auf das eigene rechte Brett für Spieler 2 gut lesbar ist, ggf. eigene Pose ergänzen.
 - **Render Free:** Free-Tier-Bedingungen (Einschlafen nach ca. 15 min, Startzeit) vor dem Deployment auf der aktuellen Preisseite gegenprüfen.
+- **Etappe 4a – Vorarbeit aus Etappe 4:** Der Client liest `VITE_SERVER_URL` bereits (`serverWsUrl` in `src/net/link.js`, verdrahtet in `src/main.js`). Im Dev startet `server/devPlugin.js` den Spielserver im Vite-Prozess (nur 127.0.0.1), der Proxy leitet `/ws` und `/health` weiter. Repo: https://github.com/panoxdesign/schiffeversenken (Push aus dem Sandbox funktioniert). Render und Vercel richtet der Nutzer selbst ein.
+- **Etappe 5 – Client muss dem Server folgen:** Gegnerische Schüsse auf die eigene Flotte wertet der Client weiterhin selbst aus (`logic.player.receiveShot`). Das `result` aus `shotResult` und die `turn`-Nachrichten werden ignoriert, das Zugrecht ergibt sich aus den lokalen Regeln. Das passt nur, solange Client- und Server-Flotte gleich sind. Spätestens beim harten Randomisieren nach der Platzierungszeit und bei Zug-Timeouts muss der Client Ergebnis und Zugrecht vom Server übernehmen.
+- **Etappe 5 – schon vorhanden:** Rückfrage vor Aufgabe über „Hauptmenü“ in der Online-Pause, Meldungen für `version` (mit Neu-laden-Knopf), `full` und Verbindungsverlust (`src/game/onlineTexts.js`). Es fehlt noch der eigene „Aufgeben“-Knopf.
+- **Etappe 7 – Doku:** `ARCHITECTURE.md` kennt die neuen Schnittstellen noch nicht: `ui.showLobby`/`hideLobby`, `showMainMenu({ onInvite, onJoin, page })`, `showHUD({ foe })`, `showPause({ online })`, `showGameOver({ title, sub, reason, onRestart: null })`, `ctx.net`, Modul `src/net/`.
 
 ### Diagramme
 
