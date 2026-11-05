@@ -173,14 +173,123 @@ test('Online: Gegner legt während der Platzierung ab -> zurück ins Menü', asy
   assert.equal(shown(host, 'showLobby').title, 'Einaugen-Jule hat abgelegt');
 });
 
-test('Online: Hafen verschwindet -> Meldung und Menü', async () => {
+/** Uhr in Schritten vorspulen, bis cond erfüllt ist (Wiederverbindungsversuche laufen asynchron). */
+async function advanceUntil(h, cond, step = 1000, max = 120) {
+  for (let i = 0; i < max && !cond(); i++) { h.clock.advance(step); await new Promise((r) => setTimeout(r, 3)); }
+}
+
+test('Online: Hafen neu gestartet -> Partie unbekannt, klare Meldung', async () => {
   const h = harbor();
   const { host, guest } = await invited(h);
   await toBattle(host, guest);
+  host.net.core = createGameServer({ clock: h.clock, rng: mulberry32(99) }); // frischer Server ohne Partien
   host.net.opened[0].kill();
-  await until(() => host.gc.state === 'menu');
+  await until(() => shown(host, 'setConnection')?.text);
+  assert.equal(shown(host, 'setConnection').text, 'Verbindung zum Hafen verloren – neuer Versuch …');
+  await advanceUntil(h, () => host.gc.state === 'menu');
   assert.equal(shown(host, 'showLobby').title, 'Verbindung zum Hafen verloren');
+  assert.match(shown(host, 'showLobby').text, /neu gestartet/);
   assert.deepEqual(host.counters(), { alive: 0, fires: 0 });
+  assert.equal(host.net.session.value, null, 'Sitzung vergessen');
+});
+
+test('Online: Hafen bleibt unerreichbar -> nach der Schonfrist Meldung', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  let tries = 0;
+  host.net.connect = async () => { tries++; throw Object.assign(new Error('weg'), { code: 'connection' }); };
+  host.net.opened[0].kill();
+  await advanceUntil(h, () => host.gc.state === 'menu');
+  assert.equal(shown(host, 'showLobby').title, 'Verbindung zum Hafen verloren');
+  assert.ok(tries >= 5 && tries <= 10, `Versuche mit wachsendem Abstand (${tries})`);
+});
+
+/** Ein paar Schüsse beider Seiten, damit Marker, Treffer und ein versenktes Schiff vorliegen. */
+async function skirmish(host, guest) {
+  for (let i = 0; i < 400; i++) {
+    if (host.gc.logic.enemy.sunkCount() >= 1 && guest.gc.logic.enemy.shots.some(Boolean) && host.gc.debug.status().pending) return;
+    const turn = [[host, guest, i % 7 === 6 ? 'miss' : 'hit'], [guest, host, i % 3 ? 'hit' : 'miss']].find(([p]) => p.gc.debug.status().pending);
+    if (turn) fireOnce(...turn);
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  assert.fail('kein Zwischenstand erreicht');
+}
+
+const snapshot = (p) => ({
+  enemyShots: p.gc.logic.enemy.shots.join(''), ownShots: p.gc.logic.player.shots.join(''),
+  sunk: p.gc.logic.enemy.sunkCount(), markers: { ...p.ctx.boards.enemy.markers }, ownMarkers: { ...p.ctx.boards.player.markers },
+  stats: [p.gc.stats.shots, p.gc.stats.hits, p.gc.statsEnemy.shots, p.gc.statsEnemy.hits],
+});
+
+test('Online: kurzer Verbindungsabbruch -> automatisch zurück, Stand ohne neue Animationen', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  await skirmish(host, guest);
+  const before = snapshot(host);
+  const shots = host.counters();
+  host.net.opened[0].kill();
+  await until(() => shown(guest, 'setConnection'));
+  assert.match(shown(guest, 'setConnection').text, /hat die Verbindung verloren$/);
+  await advanceUntil(h, () => host.net.opened.length === 2 && host.gc.debug.status().pending);
+  assert.deepEqual(snapshot(host), before, 'Bretter, Marker und Statistik wie vor dem Abbruch');
+  assert.equal(host.counters().alive, 5, 'nur die eigene Flotte – versenkte Gegnerschiffe liegen schon am Grund');
+  assert.ok(shots.alive > 5, 'vorher waren versenkte Gegnerschiffe noch in der Szene');
+  assert.equal(host.counters().fires, shots.fires, 'Feuer wieder an denselben Stellen');
+  assert.equal(host.ui.last.setConnection, null);
+  assert.ok(guest.ui.announced.includes('Rotbart ist zurück an Bord!'));
+  await play(host, guest);
+  await until(() => shown(host, 'showGameOver') && shown(guest, 'showGameOver'));
+  assert.equal(host.ui.gameOver.won, true);
+});
+
+test('Online: Neuladen im selben Tab -> zurück in die Partie', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  await skirmish(host, guest);
+  const before = snapshot(host);
+  const token = host.net.session.value;
+  assert.ok(token, 'Token im Tab-Speicher');
+  host.net.opened[0].kill(); // Seite wird verlassen
+  host.gc._token++; // alter Controller ist mit der Seite weg
+
+  const again = h.pirate('Rotbart');
+  again.net.session.save(token);
+  again.gc.start({ resume: token });
+  await until(() => again.gc.state === 'battle' && again.gc.debug.status().pending);
+  const after = snapshot(again);
+  assert.deepEqual([after.enemyShots, after.ownShots, after.sunk, after.stats], [before.enemyShots, before.ownShots, before.sunk, before.stats]);
+  assert.deepEqual(after.markers, before.markers);
+  assert.deepEqual(again.gc.debug.names, { player: 'Rotbart', enemy: 'Einaugen-Jule' });
+  await play(again, guest);
+  await until(() => shown(again, 'showGameOver'));
+  assert.equal(again.net.session.value, null, 'nach Spielende vergessen');
+});
+
+test('Online: Neuladen nach Ablauf der Partie -> Meldung statt Hänger', async () => {
+  const h = harbor();
+  const p = h.pirate('Rotbart');
+  p.net.session.save('gibtsnicht');
+  p.gc.start({ resume: 'gibtsnicht' });
+  await until(() => shown(p, 'showLobby')?.phase === 'notice');
+  assert.equal(shown(p, 'showLobby').title, 'Verbindung zum Hafen verloren');
+  assert.equal(p.net.session.value, null);
+});
+
+test('Online: Abbruch während der Platzierung -> gesetzte Schiffe bleiben', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  host.gc._plClick({ col: 0, row: 0 });
+  h.clock.advance(20_000);
+  host.net.opened[0].kill();
+  await advanceUntil(h, () => host.net.opened.length === 2 && shown(host, 'setConnection') === null);
+  assert.equal(host.gc.state, 'placement');
+  assert.deepEqual([host.gc.logic.player.ships[0].col, host.gc.logic.player.ships[0].row], [0, 0]);
+  assert.deepEqual(shown(host, 'setTimer'), { ms: TIMES.placementMs - 20_000, warn: true }, 'Restzeit wie vor dem Abbruch');
+  for (const p of [host, guest]) { p.gc.debug.autoPlace(); p.gc.debug.confirm(); }
+  await until(() => host.gc.debug.status().pending || guest.gc.debug.status().pending);
 });
 
 test('Online: Pause hält die Partie nicht an', async () => {

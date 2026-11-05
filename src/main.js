@@ -40,8 +40,11 @@ async function boot() {
   const net = {
     connect: () => openWebSocket(serverWsUrl(serverUrl)),
     health: () => fetchHealth(serverHealthUrl(serverUrl)),
+    session: tabSession('freibeuter.session'), // Token der laufenden Partie: überlebt Neuladen im selben Tab
   };
   const join = takeJoinCode(); // Einladungslink ?join=CODE – sofort aus der Adresse entfernen
+  if (join) net.session.clear();
+  const resume = join ? null : net.session.load();
   const controller = new GameController({ engine, world, boards, shipFactory, fx, cameraRig, audio, ui, net });
 
   engine.precompile();
@@ -49,9 +52,18 @@ async function boot() {
   await nextFrame();
   engine.start();
   ui.hideLoading();
-  controller.start(join ? { join } : undefined);
+  controller.start(join ? { join } : resume ? { resume } : undefined);
 
   if (import.meta.env.DEV) window.__game = { engine, world, boards, shipFactory, fx, cameraRig, audio, ui, controller };
+}
+
+/** sessionStorage-Eintrag (pro Tab); ohne Speicher (privates Fenster, blockiert) schlicht leer. */
+function tabSession(key) {
+  return {
+    load() { try { return sessionStorage.getItem(key); } catch { return null; } },
+    save(v) { try { if (v) sessionStorage.setItem(key, v); } catch { /* ignorieren */ } },
+    clear() { try { sessionStorage.removeItem(key); } catch { /* ignorieren */ } },
+  };
 }
 
 function nextFrame() {

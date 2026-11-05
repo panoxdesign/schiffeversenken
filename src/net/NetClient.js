@@ -56,7 +56,10 @@ export class NetClient {
   /** Begrüßung -> welcome { token, name, players, resumed? }. Mit token: zurück in die laufende Partie (dann folgt `state`). */
   async hello(name, token) {
     this.send({ type: C2S.hello, version: PROTOCOL_VERSION, name: typeof name === 'string' ? name : '', ...(token && { token }) });
-    return this._expect((m) => m.type === 'welcome', (m) => m.type === 'error' && !m.for);
+    const welcome = await this._expect((m) => m.type === 'welcome', (m) => m.type === 'error' && !m.for);
+    /** Sitzungs-Token: damit kommt der Client nach einem Abbruch in seine Partie zurück. */
+    this.token = welcome.token;
+    return welcome;
   }
 
   /** Raum anlegen -> Code. */

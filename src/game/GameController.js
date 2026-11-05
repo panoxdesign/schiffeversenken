@@ -105,10 +105,11 @@ export class GameController {
 
   // ------------------------------------------------------------------ Menü
   /**
-   * @param {{ join?: string, notice?: {title: string, text: string, reload?: boolean}, page?: string }} [opts]
-   *   join: Code aus dem Einladungslink (Menü wird übersprungen); notice: Hinweis über dem Menü; page: Menüseite.
+   * @param {{ join?: string, resume?: string, notice?: {title: string, text: string, reload?: boolean}, page?: string }} [opts]
+   *   join: Code aus dem Einladungslink (Menü wird übersprungen); resume: Token einer laufenden Partie (Neuladen);
+   *   notice: Hinweis über dem Menü; page: Menüseite.
    */
-  start({ join, notice, page } = {}) {
+  start({ join, resume, notice, page } = {}) {
     this._resetGame();
     const { world, audio, ui } = this.ctx;
     this.state = 'menu';
@@ -128,6 +129,7 @@ export class GameController {
     }
     if (notice) this._notice(notice);
     if (join != null) this._onlineJoin(join);
+    else if (resume) this._onlineResume(resume);
   }
 
   _notice({ title, text, reload }) {
@@ -145,13 +147,15 @@ export class GameController {
   }
 
   /** Lobby betreten: Menü weg, Verbindung zum Hafen aufbauen. Liefert den Ablauf-Token. */
-  _enterLobby(title, text) {
+  _enterLobby(title, text, onCancel = this._toOnlineMenu) {
     this._resetGame();
     this.state = 'lobby';
     call(this.ctx.ui, 'hideMainMenu');
-    call(this.ctx.ui, 'showLobby', { phase: 'busy', title, text, onCancel: this._toOnlineMenu });
+    call(this.ctx.ui, 'showLobby', { phase: 'busy', title, text, onCancel });
     return this._token;
   }
+
+  _session(method, arg) { return call(this.ctx.net && this.ctx.net.session, method, arg); }
 
   /** Zurück ins Online-Menü (bricht Lobby bzw. Partie ab). */
   _toOnlineMenu = () => this.start({ page: 'online' });
@@ -205,8 +209,13 @@ export class GameController {
     this.start({ notice: netErrorText(e && e.code), page: 'online' });
   }
 
-  /** Gegner gefunden: Verbindung geht an den Netz-Gegner über, Platzierung beginnt. */
-  _beginOnline(client, { seat, name, opponent }, role) {
+  /**
+   * Gegner gefunden: Verbindung geht an den Netz-Gegner über, Platzierung beginnt.
+   * st: `state` des Servers nach dem Wiederverbinden – dann wird der Stand ohne Animationen aufgebaut.
+   */
+  _beginOnline(client, { seat, name, opponent }, role, st = null) {
+    // Nach einem Abbruch mitten in der Platzierung: bereits gesetzte Schiffe behalten
+    const keep = st && st.phase === 'placement' && !st.fleet && this.mode === 'online' && this.state === 'placement' ? fleetOf(this.logic.player) : null;
     this._net = null; // gehört ab jetzt dem Netz-Gegner (wird mit ihm aufgeräumt)
     this._resetGame();
     this.mode = 'online';
@@ -214,11 +223,13 @@ export class GameController {
     this._onl = { turn: null, turnUntil: 0, placeUntil: 0, placeTimer: null, frozen: false };
     this.opponent = new NetOpponent(client, seat, {
       onGameOver: (msg) => this._onlineGameOver(msg),
-      onLost: () => { if (this.state !== 'gameover') this.start({ notice: netErrorText('lost') }); },
+      onLost: () => this._onlineLost(),
       onStatus: (msg) => this._onlineStatus(msg),
       onPlacementDeadline: (ms, at) => this._onlinePlacementDeadline(ms, at),
       onStart: () => { if (this.state === 'placement') this._onlineForcedStart(); },
     });
+    this._session('save', client.token);
+    if (st) { this._restoreOnline(st, keep); return; }
     if (client.ended) { this._onlineGameOver(client.ended); return; } // Gegner schon wieder weg
     this._enterPlacement('player');
     const deadline = client.latest.placementDeadline; // kam evtl. schon vor dem Netz-Gegner an
@@ -343,6 +354,7 @@ export class GameController {
 
   _plConfirm() {
     if (this.state !== 'placement' || this._plNextFree() !== -1) return;
+    if (this._onl && this._onl.offline) { call(this.ctx.audio, 'play', 'error'); return; } // erst nach dem Wiederverbinden
     if (this.mode === 'hotseat' && this._pl.side === 'player') this._hsHandoverPlacement();
     else this._startBattle();
   }
@@ -518,6 +530,7 @@ export class GameController {
     this.opponent = null;
     this._clearOnline();
     this._onl = null;
+    if (this.mode === 'online') this._session('clear');
     this.stats = this._newStats();
     this.statsEnemy = this._newStats();
     this._hs = this._newHotseat();
@@ -970,13 +983,164 @@ export class GameController {
     if (!Array.isArray(fleet)) return;
     const key = (f) => JSON.stringify([...f].sort((a, b) => a.index - b.index).map((x) => [x.index, x.col, x.row, x.orientation]));
     if (key(fleetOf(this.logic.player)) === key(fleet)) return;
+    this._placeOwnFleet(fleet);
+    this._updateUI();
+    call(this.ctx.ui, 'announce', 'Der Hafenmeister hat deine Flotte aufgestellt', 'info');
+  }
+
+  /** Eigene Flotte (placeFleet-Format) ins Brett und in die Szene setzen. */
+  _placeOwnFleet(fleet) {
     const b = this._newBoard();
     for (const x of fleet) b.place(x.index, LENGTHS[x.index], x.col, x.row, x.orientation);
     this.logic.player = b;
     this._pl.side = 'player';
     for (let i = 0; i < FLEET.length; i++) this._plSync(i);
+  }
+
+  // ------------------------------------------------------------------ Online: Wiederverbinden
+  /** Partie nach Neuladen fortsetzen (Token aus dem Tab-Speicher). */
+  async _onlineResume(saved) {
+    const cancel = () => { this._session('clear'); this._toOnlineMenu(); };
+    const token = this._enterLobby('Zurück an Bord …', 'Deine Partie wird gesucht.', cancel);
+    try {
+      if (await this._rejoin(saved, token) === 'gone') { this._session('clear'); this.start({ notice: netErrorText('gone'), page: 'online' }); }
+    } catch (e) { this._lobbyFailed(e, token); }
+  }
+
+  /** Verbindung zum Hafen während der Partie verloren: Szene bleibt stehen, neu verbinden, solange die Schonfrist läuft. */
+  async _onlineLost() {
+    if (this.state === 'gameover') return; // nichts mehr zu retten
+    const o = this._onl, saved = this.opponent && this.opponent.client.token;
+    if (this.mode !== 'online' || !o || !saved) { this.start({ notice: netErrorText('lost'), page: 'online' }); return; }
+    const token = ++this._token; // laufende Abläufe beenden
+    this._cancelAim();
+    this._clearOnline();
+    o.offline = true;
+    o.turn = null;
+    const { ui } = this.ctx;
+    call(ui, 'setConnection', { text: 'Verbindung zum Hafen verloren – neuer Versuch …' });
+    const giveUp = this.clock.now() + TIMES.graceMs;
+    for (let delay = 1000; ; delay = Math.min(delay * 2, 8000)) {
+      await new Promise((r) => this.clock.setTimeout(r, delay));
+      if (token !== this._token) return;
+      if (this.clock.now() >= giveUp) break;
+      try {
+        if (await this._rejoin(saved, token) === 'gone') { this.start({ notice: netErrorText('gone'), page: 'online' }); }
+        return;
+      } catch (e) {
+        if (e === CANCEL || token !== this._token) return;
+        if (e && e.code === 'version') { this.start({ notice: netErrorText('version'), page: 'online' }); return; }
+      }
+    }
+    this.start({ notice: netErrorText('lost'), page: 'online' });
+  }
+
+  /** Mit dem Token der Partie neu verbinden: 'back' (Stand wiederhergestellt) oder 'gone' (Partie unbekannt). */
+  async _rejoin(saved, token) {
+    const net = this.ctx.net;
+    if (!net || typeof net.connect !== 'function') throw Object.assign(new Error('kein Netz'), { code: 'unavailable' });
+    const transport = await net.connect();
+    if (token !== this._token) { transport.close(); throw CANCEL; }
+    const client = new NetClient(transport, { now: () => this.clock.now() });
+    try {
+      const welcome = await client.hello(this._playerName(), saved);
+      if (!welcome.resumed) { client.close(); return 'gone'; }
+      const st = await client.next((m) => m.type === 'state');
+      if (token !== this._token) throw CANCEL;
+      this._beginOnline(client, st, null, st);
+      return 'back';
+    } catch (e) { client.close(); throw e; }
+  }
+
+  /** Stand aus `state` aufbauen – ohne Animationen; danach geht es mit den Server-Ereignissen weiter. */
+  _restoreOnline(st, keep) {
+    const opp = this.opponent, token = this._token;
+    if (st.phase === 'placement') {
+      if (st.fleet) { // schon bestätigt: wartet auf den Gegner
+        opp.fleetSent = true;
+        this._placeOwnFleet(st.fleet);
+        this._startBattle();
+      } else {
+        this._enterPlacement('player');
+        const d = opp.client.latest.placementDeadline; // kam evtl. direkt nach state, vor dem Netz-Gegner
+        if (d && d.at >= st.at) this._onlinePlacementDeadline(d.ms, d.at);
+        if (keep) {
+          for (const x of keep) this.logic.player.place(x.index, LENGTHS[x.index], x.col, x.row, x.orientation);
+          for (let i = 0; i < FLEET.length; i++) this._plSync(i);
+          this._pl.selected = this._plNextFree();
+          this._plRefresh();
+        }
+      }
+    } else {
+      opp.fleetSent = true;
+      opp.started = { restored: true };
+      this._restoreBattle(st);
+      if (st.phase === 'gameover') { this._restoreGameOver(st, token); return; }
+      this._onlineLoop(token);
+    }
+    if (st.opponentStatus === 'grace') this._onlineStatus({ status: 'grace', ms: st.graceMs });
+  }
+
+  /** Bretter, Marker, Schaden, Feuer und versenkte Schiffe so setzen, wie sie nach allen Schüssen aussehen. */
+  _restoreBattle(st) {
+    const { ui, world, audio, boards } = this.ctx;
+    this.state = 'battle';
+    this.input.setBoard(null);
+    this._ensureFlagships();
+    this._placeOwnFleet(st.fleet);
+    const pos = (side, c, r) => {
+      const v = boards[side].cellToWorld ? boards[side].cellToWorld(c, r, new THREE.Vector3()) : new THREE.Vector3();
+      v.y = call(world, 'getWaterHeight', v.x, v.z) || 0;
+      return v;
+    };
+
+    // Eigene Flotte: Einschläge des Gegners
+    const own = this.logic.player, hits = [];
+    for (const s of st.received) {
+      const r = own.receiveShot(s.col, s.row);
+      if (r.result === 'miss') { call(boards.player, 'markMiss', s.col, s.row); continue; }
+      call(boards.player, 'markHit', s.col, s.row);
+      call(this.ships.player[r.shipIndex], 'damage', r.cellIndex);
+      hits.push({ ...s, shipIndex: r.shipIndex, cellIndex: r.cellIndex });
+    }
+    for (const h of hits) if (!own.ships[h.shipIndex].sunk) this._startFire('player', h.col, h.row, this.ships.player[h.shipIndex], h.cellIndex, pos('player', h.col, h.row));
+    own.ships.forEach((s, i) => { if (s && s.sunk) call(this.ships.player[i], 'setVisible', false); }); // liegen bereits am Grund
+
+    // Wissens-Brett: eigene Schüsse und versenkte Gegnerschiffe
+    const kb = this.logic.enemy;
+    for (const s of st.shots) {
+      kb.recordShot(s.col, s.row, s.result !== 'miss');
+      call(boards.enemy, s.result === 'miss' ? 'markMiss' : 'markHit', s.col, s.row);
+    }
+    for (const x of st.sunk) kb.recordSunk(x.index, x.length, x.col, x.row, x.orientation);
+    for (const s of st.shots) if (s.result === 'hit' && kb.shipAt(s.col, s.row) < 0) this._startFire('enemy', s.col, s.row, null, -1, pos('enemy', s.col, s.row));
+
+    if (RULES.noTouching) {
+      for (const [side, b] of [['player', own], ['enemy', kb]]) b.ships.forEach((s, i) => { if (s && s.sunk) for (const n of b.neighborsOf(i)) call(boards[side], 'markBlocked', n.col, n.row); });
+    }
+
+    // Statistik: jeder abgeschlossene Zug endet mit einem Fehlschuss; den laufenden Zug zählt das nächste turn
+    const misses = (list) => list.filter((s) => s.result === 'miss').length;
+    const [mine, theirs] = [st.stats[st.seat], st.stats[1 - st.seat]];
+    this.stats = { shots: mine.shots, hits: mine.hits, turns: misses(st.shots), startedAt: performance.now() - (st.elapsedMs || 0) };
+    this.statsEnemy = { shots: theirs.shots, hits: theirs.hits, turns: misses(st.received), startedAt: 0 };
+    if (st.over && st.over.reason === 'allSunk') this._statsOf(st.over.winner === st.seat ? 'player' : 'enemy').turns++;
+
+    call(world, 'setMood', 'battle');
+    call(audio, 'playMusic', 'battle');
+    call(ui, 'showHUD', { foe: this.names.enemy });
+    call(ui, 'setTurn', 'enemy', 'Zurück an Bord …');
+    this._setView('player', 1.2);
     this._updateUI();
-    call(this.ctx.ui, 'announce', 'Der Hafenmeister hat deine Flotte aufgestellt', 'info');
+  }
+
+  _restoreGameOver(st, token) {
+    const over = st.over;
+    if (over.winner === null) {
+      this.start({ notice: { title: `${this.names.enemy} hat abgelegt`, text: 'Die Partie ist geplatzt, bevor ein Schuss fiel.' }, page: 'online' });
+      return;
+    }
+    this._gameOver(over.winner === st.seat, token, null, over.reason).catch(ignoreCancel);
   }
 
   // ------------------------------------------------------------------ Online: Zeiten & Verbindung des Gegners
@@ -1093,6 +1257,7 @@ export class GameController {
     const hs = this.mode === 'hotseat', online = this.mode === 'online';
     this.state = 'gameover';
     this._clearOnline();
+    if (online) this._session('clear'); // nach dem Ende gibt es nichts mehr fortzusetzen
     if (hs) this._showShips('all');
     if (this._pauseMenu) { this._pauseMenu = false; this._paused = false; this.input.enabled = true; call(ui, 'hidePause'); }
     this._readyWaiters.splice(0).forEach((r) => r());

@@ -22,8 +22,16 @@ export function memoryTransport(core) {
   };
 }
 
-/** ctx.net für den GameController: jede Verbindung ist eine neue In-Memory-Gegenstelle zum Kern. */
+/**
+ * ctx.net für den GameController: jede Verbindung ist eine neue In-Memory-Gegenstelle zum Kern.
+ * `core` ist austauschbar (Server-Neustart), `session` ersetzt den Tab-Speicher (sessionStorage).
+ */
 export function memoryNet(core) {
   const opened = [];
-  return { opened, connect: async () => { const t = memoryTransport(core); opened.push(t); return t; } };
+  const net = {
+    core, opened,
+    connect: async () => { const t = memoryTransport(net.core); opened.push(t); return t; },
+    session: { value: null, load() { return this.value; }, save(v) { this.value = v; }, clear() { this.value = null; } },
+  };
+  return net;
 }

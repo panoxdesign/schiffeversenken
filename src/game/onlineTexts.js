@@ -20,6 +20,7 @@ export function netErrorText(code) {
     case 'rateLimit': return { title: 'Zu viele Versuche', text: 'Warte eine Minute, bevor du den nächsten Code probierst.' };
     case 'badCode': return { title: 'Ungültiger Code', text: 'Ein Code hat 4 Zeichen und enthält kein 0, O, 1, I oder L.' };
     case 'lost': return { title: 'Verbindung zum Hafen verloren', text: `Der Hafen antwortet nicht mehr. ${RETRY}` };
+    case 'gone': return { title: 'Verbindung zum Hafen verloren', text: 'Der Hafen kennt deine Partie nicht mehr – vermutlich wurde er neu gestartet.' };
     default: return { title: 'Hafen nicht erreichbar', text: `Der Hafen antwortet gerade nicht. ${RETRY}` };
   }
 }

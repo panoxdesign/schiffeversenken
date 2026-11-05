@@ -26,6 +26,8 @@ export class NetOpponent {
     this.seat = seat;
     /** start-Nachricht des Servers, sobald der Kampf begonnen hat. */
     this.started = null;
+    /** Flotte liegt dem Server schon vor (gesendet oder nach dem Wiederverbinden bekannt). */
+    this.fleetSent = false;
     this._off = client.onPush((msg) => this._push(msg, events));
     client.onLost = () => events.onLost && events.onLost();
   }
@@ -51,7 +53,7 @@ export class NetOpponent {
 
   /** Flotte übergeben (falls der Server nicht schon begonnen hat) und auf den Start warten -> { first, fleet }. */
   async submitFleet(ships) {
-    if (!this.started) this.client.send({ type: C2S.placeFleet, ships });
+    if (!this.started && !this.fleetSent) { this.fleetSent = true; this.client.send({ type: C2S.placeFleet, ships }); }
     const m = await this.client.next((x) => x.type === 'start' || (x.type === 'error' && x.for === C2S.placeFleet));
     if (m.type === 'error') throw new NetError(m.code);
     return this._start(m);
