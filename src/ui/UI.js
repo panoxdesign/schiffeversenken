@@ -1,8 +1,10 @@
-// HTML/CSS-Overlay: Laden, Hauptmenü, Online-Lobby, Platzierung, HUD, Banner, Sichtschutz, Game Over, Pause, Einstellungen.
+// HTML/CSS-Overlay: Laden, Hauptmenü, Online-Lobby, Platzierung, HUD, Sanduhr, Verbindungshinweis, Banner, Sichtschutz,
+// Game Over, Pause, Einstellungen.
 import { CSS } from './styles.js';
 import * as I from './icons.js';
 import { DIFFICULTIES, FLEET, QUALITY_PRESETS } from '../config.js';
 import { MAX_NAME_LENGTH, CODE_LENGTH, sanitizeName, normalizeCode } from '../../shared/protocol.js';
+import { TIMES } from '../../shared/rules.js';
 import { randomPirateName } from '../../shared/names.js';
 
 const DIFF_ICON = { easy: 'boat', normal: 'anchor', hard: 'skull' };
@@ -416,6 +418,55 @@ export class UI {
     if (v) { h.coord.textContent = v; h.coord.hidden = false; } else h.coord.hidden = true;
   }
 
+  /* ------------------------------------------------------------------ Sanduhr (online) */
+  /**
+   * Restzeit oben in der Mitte (Platzierung und Kampf). null blendet aus.
+   * ms: Restzeit; warn: letzte 10 s rot pulsieren und ticken (eigener Zug); frozen: angehalten (Gegner getrennt).
+   */
+  setTimer(t) {
+    clearInterval(this._tmInt); this._tmInt = 0;
+    if (!t) { if (this._tm) this._tm.root.classList.remove('in', 'warn'); return; }
+    if (!this._tm) {
+      const n = el('div', 'fb-timer', `${I.hourglass()}<b></b>`); n.setAttribute('role', 'timer'); n.setAttribute('aria-label', 'Restzeit');
+      this.el.appendChild(n);
+      this._tm = { root: n, txt: n.querySelector('b') };
+    }
+    const { root, txt } = this._tm, until = performance.now() + Math.max(0, t.ms || 0);
+    let lastTick = -1;
+    const draw = () => {
+      const left = Math.max(0, until - performance.now()), sec = Math.ceil(left / 1000);
+      const v = fmtTime(sec); if (txt.textContent !== v) txt.textContent = v;
+      const warn = !!t.warn && left > 0 && left <= TIMES.warnMs;
+      root.classList.toggle('warn', warn);
+      if (warn && !t.frozen && sec !== lastTick) { lastTick = sec; this._snd('tick', { volume: 0.6 }); }
+      if (!left) { clearInterval(this._tmInt); this._tmInt = 0; }
+    };
+    root.classList.toggle('frozen', !!t.frozen);
+    root.classList.add('in');
+    draw();
+    if (!t.frozen) this._tmInt = setInterval(draw, 200);
+  }
+
+  /** Verbindungshinweis unter der Sanduhr, z. B. Gegner getrennt (mit Countdown der Schonfrist). null blendet aus. */
+  setConnection(c) {
+    clearInterval(this._cnInt); this._cnInt = 0;
+    if (!c) { if (this._cn) this._cn.root.classList.remove('in'); return; }
+    if (!this._cn) {
+      const n = el('div', 'fb-conn', `<span class="ic-w">${I.wheel()}</span><span class="tx"></span><b></b>`); n.setAttribute('role', 'status'); n.setAttribute('aria-live', 'polite');
+      this.el.appendChild(n);
+      this._cn = { root: n, tx: n.querySelector('.tx'), t: n.querySelector('b') };
+    }
+    const { root, tx, t } = this._cn;
+    tx.textContent = c.text || '';
+    t.hidden = c.ms == null;
+    if (c.ms != null) {
+      const until = performance.now() + c.ms;
+      const draw = () => { const left = Math.max(0, until - performance.now()); t.textContent = fmtTime(Math.ceil(left / 1000)); if (!left) { clearInterval(this._cnInt); this._cnInt = 0; } };
+      draw(); this._cnInt = setInterval(draw, 250);
+    }
+    root.classList.add('in');
+  }
+
   /* ------------------------------------------------------------------ Banner */
   _buildBanner() {
     this._banWrap = el('div', 'fb-ban'); this._banWrap.setAttribute('role', 'status'); this._banWrap.setAttribute('aria-live', 'polite');
@@ -507,26 +558,33 @@ export class UI {
   hideGameOver() { if (this._over) this._hide(this._over); }
 
   /* ------------------------------------------------------------------ Pause */
-  /** online: Hinweis, dass die Partie weiterläuft. */
-  showPause({ onResume, onMenu, online = false } = {}) {
-    this._cb.pause = { onResume, onMenu };
+  /** online: Hinweis, dass die Partie weiterläuft. onResign: „Aufgeben“ (nur online, mit Rückfrage). */
+  showPause({ onResume, onMenu, onResign, online = false } = {}) {
+    this._cb.pause = { onResume, onMenu, onResign };
     if (!this._pause) {
       const n = this._pause = this._screen('fb-modal fb-pause');
       n.innerHTML = `<div class="pnl parch" role="dialog" aria-modal="true" aria-label="Pause"><div class="pw">${I.wheel()}</div><h2>Pause</h2>
         <p class="note pn" style="text-align:center"></p>
-        <button class="btn primary" data-a="resume" data-focus>Weiter</button><button class="btn" data-a="set">${I.cog()}Einstellungen</button><button class="btn" data-a="menu">Hauptmenü</button></div>`;
+        <button class="btn primary" data-a="resume" data-focus>Weiter</button><button class="btn" data-a="set">${I.cog()}Einstellungen</button>
+        <button class="btn" data-a="resign">${I.flag()}<span>Aufgeben</span></button><button class="btn" data-a="menu">Hauptmenü</button></div>`;
       n.addEventListener('click', (e) => {
         const b = e.target.closest('button'); if (!b) return; const c = this._cb.pause || {};
         if (b.dataset.a === 'resume') c.onResume && c.onResume();
         else if (b.dataset.a === 'menu') {
           if (this._pauseOnline && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Wirklich? Zählt als Aufgabe'; return; }
           c.onMenu && c.onMenu();
+        } else if (b.dataset.a === 'resign') {
+          if (!b.dataset.armed) { b.dataset.armed = '1'; b.querySelector('span').textContent = 'Wirklich die Flagge streichen?'; return; }
+          c.onResign && c.onResign();
         } else if (b.dataset.a === 'set') this.showSettings();
       });
     }
     this._pauseOnline = online;
     const menuBtn = this._pause.querySelector('[data-a=menu]');
     delete menuBtn.dataset.armed; menuBtn.textContent = 'Hauptmenü';
+    const resignBtn = this._pause.querySelector('[data-a=resign]');
+    delete resignBtn.dataset.armed; resignBtn.querySelector('span').textContent = 'Aufgeben';
+    resignBtn.hidden = !(online && onResign);
     this._pause.querySelector('.pn').textContent = online ? 'Achtung: Online läuft die Partie weiter, Käpt\'n!' : "Die Flotte hält inne, Käpt'n.";
     this._show(this._pause); this._focus(this._pause);
   }

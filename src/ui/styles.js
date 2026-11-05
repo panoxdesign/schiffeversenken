@@ -207,6 +207,21 @@ box-shadow:inset 0 1px 0 rgba(255,220,150,.35),inset 0 0 0 3px rgba(0,0,0,.25),0
 @keyframes fb-pop{0%{transform:scale(.7) translateY(-14px);opacity:0}60%{transform:scale(1.07);opacity:1}100%{transform:none}}
 @keyframes fb-dot{0%,100%{opacity:.25;transform:translateY(0)}50%{opacity:1;transform:translateY(-3px)}}
 .fb-hud .stats{display:flex;gap:6px;pointer-events:none;margin-top:2px}
+/* ---------- Sanduhr & Verbindungshinweis (online) ---------- */
+.fb-timer,.fb-conn{position:absolute;left:50%;z-index:13;display:flex;align-items:center;gap:8px;border-radius:999px;opacity:0;transform:translate(-50%,-8px);transition:opacity .3s ease,transform .3s ease;pointer-events:none}
+.fb-timer.in,.fb-conn.in{opacity:1;transform:translate(-50%,0)}
+.fb-timer{top:calc(max(10px,env(safe-area-inset-top)) + clamp(44px,6.8vh,58px) + 10px);padding:4px 14px 4px 8px;font-size:22px;font-weight:900;color:#fff0c4;font-variant-numeric:tabular-nums;
+border:2px solid var(--brass3);background:rgba(26,14,7,.8);box-shadow:0 3px 8px rgba(0,0,0,.45)}
+.fb-timer .ic{font-size:28px}
+.fb-timer.frozen{opacity:.6}
+.fb-timer.warn{color:#ffd2c4;border-color:#c0412b;background:rgba(110,22,14,.88);animation:fb-warn 1s ease-in-out infinite}
+.fb-timer.warn .sand{fill:#ff8a6a}
+@keyframes fb-warn{0%,100%{transform:translate(-50%,0) scale(1)}50%{transform:translate(-50%,0) scale(1.1)}}
+.fb-conn{top:calc(max(10px,env(safe-area-inset-top)) + clamp(44px,6.8vh,58px) + 58px);max-width:92vw;padding:6px 16px 6px 10px;font-size:15px;font-weight:700;color:#ffe2b0;
+border:2px solid #a03a2a;background:rgba(48,14,10,.9);box-shadow:0 3px 8px rgba(0,0,0,.45)}
+.fb-conn .ic-w{width:20px;height:20px;flex:none;animation:fb-spin 2.4s linear infinite}
+.fb-conn .ic-w .ic{width:100%;height:100%}
+.fb-conn b{font-variant-numeric:tabular-nums;color:#fff0c4}
 .fb-hud .st{min-width:62px;padding:5px 9px 4px;text-align:center;border-radius:8px;border:1.5px solid rgba(220,171,74,.55);background:rgba(26,14,7,.72);box-shadow:0 3px 8px rgba(0,0,0,.4)}
 .fb-hud .st span{display:block;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#d2b574}
 .fb-hud .st b{display:block;font-size:19px;line-height:1.15;color:#fff0c4;font-variant-numeric:tabular-nums}

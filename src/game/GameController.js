@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { FLEET, RULES, BOARD_SIZE, COL_LABELS, ROW_LABELS, FLAGSHIP_POSITION, BOARD_CENTER } from '../config.js';
 import { Board } from '../../shared/Board.js';
 import { fleetOf, normalizeCode } from '../../shared/protocol.js';
+import { TIMES } from '../../shared/rules.js';
+import { systemClock } from '../../shared/clock.js';
 import { distinctNames } from '../../shared/names.js';
 import { AIOpponent } from './opponents/AIOpponent.js';
 import { NetClient } from '../net/NetClient.js';
@@ -46,6 +48,10 @@ export class GameController {
     this._paused = false; // Abläufe angehalten (nicht online)
     this._pauseMenu = false; // Pausenmenü offen (online läuft das Spiel dabei weiter)
     this._net = null; // Online: Verbindung während der Lobby (danach gehört sie dem NetOpponent)
+    /** Uhr für Online-Fristen (Platzierungs- und Zugzeit); Tests injizieren eine vorspulbare. */
+    this.clock = ctx.clock || systemClock;
+    /** Online-Partie: { turn, turnUntil, placeUntil, placeTimer, frozen } (Zeiten nach this.clock). */
+    this._onl = null;
     // Weck-Ping zum Spielserver, sobald das Hauptmenü öffnet (nur wenn das Netz einen Health-Check anbietet)
     this._harbor = ctx.net && typeof ctx.net.health === 'function'
       ? watchHarbor({
@@ -155,7 +161,7 @@ export class GameController {
     if (!net || typeof net.connect !== 'function') throw Object.assign(new Error('kein Netz'), { code: 'unavailable' });
     const transport = await net.connect();
     if (token !== this._token) { transport.close(); throw CANCEL; }
-    const client = this._net = new NetClient(transport);
+    const client = this._net = new NetClient(transport, { now: () => this.clock.now() });
     client.onLost = () => { if (this._net === client) this.start({ notice: netErrorText('lost') }); };
     await client.hello(this._playerName());
     await this._cp(token);
@@ -205,12 +211,18 @@ export class GameController {
     this._resetGame();
     this.mode = 'online';
     this.names = { player: name, enemy: opponent };
+    this._onl = { turn: null, turnUntil: 0, placeUntil: 0, placeTimer: null, frozen: false };
     this.opponent = new NetOpponent(client, seat, {
       onGameOver: (msg) => this._onlineGameOver(msg),
       onLost: () => { if (this.state !== 'gameover') this.start({ notice: netErrorText('lost') }); },
+      onStatus: (msg) => this._onlineStatus(msg),
+      onPlacementDeadline: (ms, at) => this._onlinePlacementDeadline(ms, at),
+      onStart: () => { if (this.state === 'placement') this._onlineForcedStart(); },
     });
     if (client.ended) { this._onlineGameOver(client.ended); return; } // Gegner schon wieder weg
     this._enterPlacement('player');
+    const deadline = client.latest.placementDeadline; // kam evtl. schon vor dem Netz-Gegner an
+    if (deadline) this._onlinePlacementDeadline(deadline.ms, deadline.at);
     if (role === 'host') call(this.ctx.ui, 'announce', `${opponent} ist an Bord!`, 'info');
   }
 
@@ -414,7 +426,10 @@ export class GameController {
     this._paused = !online; // online läuft die Partie weiter
     this._pauseStart = now;
     this.input.enabled = false;
-    call(this.ctx.ui, 'showPause', { online, onResume: () => this._resume(), onMenu: () => this.start() });
+    call(this.ctx.ui, 'showPause', {
+      online, onResume: () => this._resume(), onMenu: () => this.start(),
+      onResign: online ? () => { this._resume(); call(this.opponent, 'resign'); } : undefined,
+    });
   }
 
   _resume() {
@@ -501,6 +516,8 @@ export class GameController {
     call(ui, 'setCoordinate', null);
     call(this.opponent, 'dispose');
     this.opponent = null;
+    this._clearOnline();
+    this._onl = null;
     this.stats = this._newStats();
     this.statsEnemy = this._newStats();
     this._hs = this._newHotseat();
@@ -621,19 +638,18 @@ export class GameController {
     call(audio, 'playMusic', 'battle');
     call(ui, 'showHUD', this.mode === 'online' ? { foe: this.names.enemy } : undefined);
     if (this.mode === 'hotseat') { this._hotseatLoop(token); return; }
-    if (this.mode === 'ai') this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
     this._updateUI();
+    if (this.mode === 'online') { this._onlineBattle(token); return; }
+    this.opponent = new AIOpponent({ difficulty: this.difficulty, rng: this.rng, sleep: (sec) => this._sleep(sec) });
     this._battleLoop(token);
   }
 
+  /** Kampf gegen die KI (online: _onlineBattle). */
   async _battleLoop(token) {
-    const { ui } = this.ctx, online = this.mode === 'online', foe = this.names.enemy;
     let errors = 0, first;
     try {
-      if (online) call(ui, 'setTurn', 'enemy', `Warte auf ${foe} …`);
       ({ first } = await this.opponent.submitFleet(fleetOf(this.logic.player)));
       await this._cp(token);
-      if (online) call(ui, 'announce', first === 'player' ? 'Du eröffnest das Feuer!' : `${foe} eröffnet das Feuer!`, 'turn');
     } catch (e) {
       if (e !== CANCEL && token === this._token) { console.error('[game] Flotte konnte nicht übergeben werden', e); this.start(); }
       return;
@@ -651,7 +667,7 @@ export class GameController {
           if (l === 'lost') { await this._gameOver(false, token); return; }
         }
       } catch (e) {
-        if (e === CANCEL || token !== this._token) return; // abgebrochen (z. B. Spielende vom Server)
+        if (e === CANCEL || token !== this._token) return;
         console.error('[game] Fehler im Kampfablauf', e);
         if (++errors > 5) { console.error('[game] zu viele Fehler, zurück ins Menü'); this.start(); return; }
         this._pending = null;
@@ -691,14 +707,14 @@ export class GameController {
     }
   }
 
+  /** Zug der KI. */
   async _enemyTurn(token) {
     const { ui, boards } = this.ctx;
-    const foe = this.mode === 'online' ? this.names.enemy : null;
     this.statsEnemy.turns++;
-    call(ui, 'setTurn', 'enemy', foe ? `${foe} zielt …` : undefined);
+    call(ui, 'setTurn', 'enemy');
     call(boards.enemy, 'setActive', false);
     call(boards.player, 'setActive', true);
-    call(ui, 'announce', foe ? `${foe} ist am Zug` : 'Der Feind ist am Zug', 'turn');
+    call(ui, 'announce', 'Der Feind ist am Zug', 'turn');
     const shotP = this.opponent.nextShot();
     await this._camTo('player', 1.1, token);
     for (let shot = await shotP; ; shot = await this.opponent.nextShot()) {
@@ -713,13 +729,18 @@ export class GameController {
 
   _fleetSunk(side) { return this.logic[side].sunkCount() === FLEET.length; }
 
-  /** Gegner-Schuss auf das eigene Brett auswerten bzw. eigenen Schuss beim Gegner auflösen lassen. */
+  /** KI/Hot-Seat: Gegner-Schuss auf das eigene Brett auswerten bzw. eigenen Schuss beim Gegner auflösen lassen. */
   async _resolveShot(shooter, col, row, token) {
     if (shooter === 'enemy' || this.mode === 'hotseat') return this.logic[other(shooter)].receiveShot(col, row);
-    const kb = this.logic.enemy;
-    if (kb.wasShot(col, row)) return { result: 'repeat', shipIndex: -1, cellIndex: -1, cells: [] };
+    if (this.logic.enemy.wasShot(col, row)) return { result: 'repeat', shipIndex: -1, cellIndex: -1, cells: [] };
     const r = await this.opponent.shoot(col, row);
     await this._cp(token);
+    return this._learnShot(col, row, r);
+  }
+
+  /** Ergebnis eines eigenen Schusses ins Wissens-Brett eintragen. r: { result, ship? } (ship bei 'sunk'). */
+  _learnShot(col, row, r) {
+    const kb = this.logic.enemy;
     if (r.result === 'sunk') {
       const { index, length, col: c, row: rw, orientation } = r.ship;
       kb.recordSunk(index, length, c, rw, orientation);
@@ -729,12 +750,15 @@ export class GameController {
     return { result: r.result, shipIndex: -1, cellIndex: -1, cells: [] };
   }
 
-  /** Ein kompletter Schuss samt Inszenierung. shooter: 'player' | 'enemy'. */
-  async _shoot(shooter, col, row, token) {
+  /**
+   * Ein kompletter Schuss samt Inszenierung. shooter: 'player' | 'enemy'.
+   * given: bereits feststehendes Ergebnis (online vom Server); sonst wird es hier ermittelt.
+   */
+  async _shoot(shooter, col, row, token, given) {
     const { boards, fx, audio, cameraRig, world, ui, shipFactory } = this.ctx;
     const tSide = shooter === 'player' ? 'enemy' : 'player';
     const view = boards[tSide];
-    const res = await this._resolveShot(shooter, col, row, token);
+    const res = given || await this._resolveShot(shooter, col, row, token);
     if (res.result === 'repeat') return res;
     const st = this._statsOf(shooter);
     st.shots++;
@@ -842,6 +866,190 @@ export class GameController {
     }
   }
 
+  // ------------------------------------------------------------------ Online: Kampf (der Server ist Schiedsrichter)
+  // Ergebnis und Zugrecht kommen vom Server (shotResult, turn), nicht aus lokalen Regeln. Das eigene Brett wird
+  // lokal mitgeführt (für Schaden und Feuer); die Flotte dazu nennt der Server beim Start.
+
+  async _onlineBattle(token) {
+    const { ui } = this.ctx, foe = this.names.enemy;
+    call(ui, 'setTurn', 'enemy', `Warte auf ${foe} …`);
+    this._onlinePlacementTimer();
+    let start;
+    try {
+      start = await this.opponent.submitFleet(fleetOf(this.logic.player));
+      await this._cp(token);
+    } catch (e) {
+      // Spielende bzw. Verbindungsabbruch haben eigene Pfade
+      if (e !== CANCEL && token === this._token && e.code !== 'ended' && e.code !== 'connection') { console.error('[game] Flotte konnte nicht übergeben werden', e); this.start(); }
+      return;
+    }
+    this._clearOnline();
+    this._adoptFleet(start.fleet);
+    call(ui, 'announce', start.first === 'player' ? 'Du eröffnest das Feuer!' : `${foe} eröffnet das Feuer!`, 'turn');
+    this._onlineLoop(token);
+  }
+
+  /** Server-Ereignisse der Reihe nach inszenieren, bis das Spiel endet oder abgebrochen wird. */
+  async _onlineLoop(token) {
+    for (;;) {
+      let ev;
+      try { ev = await this.opponent.nextEvent(); } catch { return; } // Spielende oder Verbindung weg: eigene Pfade
+      if (token !== this._token) return;
+      try {
+        if (ev.type === 'turn') await this._onlineTurn(ev, token);
+        else if (ev.type === 'error') this._onlineAim(token); // Schuss abgelehnt (z. B. Zeit lief gerade ab)
+        else if (await this._onlineShot(ev, token)) return;
+      } catch (e) {
+        if (e === CANCEL || token !== this._token) return;
+        console.error('[game] Fehler im Online-Ablauf', e);
+      }
+    }
+  }
+
+  async _onlineTurn(ev, token) {
+    const { ui, boards } = this.ctx, o = this._onl, foe = this.names.enemy;
+    const side = this.opponent.side(ev.seat);
+    o.turnUntil = ev.at + ev.ms;
+    if (side !== o.turn) {
+      o.turn = side;
+      this._statsOf(side).turns++;
+      call(boards[side], 'setActive', false);
+      call(boards[other(side)], 'setActive', true);
+      call(ui, 'setTurn', side, side === 'enemy' ? `${foe} zielt …` : undefined);
+      call(ui, 'announce', side === 'player' ? 'Dein Zug' : `${foe} ist am Zug`, 'turn');
+      this._updateUI();
+      await this._camTo(other(side), 1.1, token);
+    }
+    this._onlineTurnTimer();
+    this._onlineAim(token);
+  }
+
+  /** Eigener Zug: auf einen Klick warten und ihn an den Server schicken. */
+  _onlineAim(token) {
+    const o = this._onl;
+    if (!o || o.turn !== 'player' || o.frozen || this._pending || this.state !== 'battle') return;
+    this._turnSide = 'player';
+    this._aim = 'enemy';
+    this._awaitPlayerShot(token).then((cell) => { if (token === this._token) this.opponent.shoot(cell.col, cell.row); }, ignoreCancel);
+  }
+
+  /** Laufendes Zielen abbrechen (Zufallsschuss des Servers, Gegner getrennt). */
+  _cancelAim() {
+    if (!this._pending) return;
+    const p = this._pending;
+    this._pending = null;
+    p.reject(CANCEL);
+    this.input.setBoard(null);
+    call(this.ctx.boards.enemy, 'setHover', 0, 0, null);
+    call(this.ctx.ui, 'setCoordinate', null);
+  }
+
+  /** shotResult inszenieren; true, wenn damit eine Flotte versenkt ist (Spielende). */
+  async _onlineShot(ev, token) {
+    const { ui } = this.ctx, foe = this.names.enemy;
+    this._cancelAim();
+    call(ui, 'setTimer', null);
+    const shooter = this.opponent.side(ev.shooter);
+    if (ev.auto) call(ui, 'announce', shooter === 'player' ? 'Zeit um – ein Zufallsschuss!' : `${foe} zögert – ein Zufallsschuss!`, 'warning');
+    let res;
+    if (shooter === 'enemy') {
+      res = this.logic.player.receiveShot(ev.col, ev.row);
+      if (res.result !== ev.result) console.warn('[game] eigenes Brett weicht vom Server ab', ev, res.result);
+    } else {
+      res = this._learnShot(ev.col, ev.row, ev);
+    }
+    await this._shoot(shooter, ev.col, ev.row, token, res);
+    this._updateUI();
+    if (!this._fleetSunk(other(shooter))) return false;
+    await this._gameOver(shooter === 'player', token);
+    return true;
+  }
+
+  /** Flotte vom Server übernehmen, falls sie von der lokalen abweicht (Server hat nach Zeitablauf ergänzt). */
+  _adoptFleet(fleet) {
+    if (!Array.isArray(fleet)) return;
+    const key = (f) => JSON.stringify([...f].sort((a, b) => a.index - b.index).map((x) => [x.index, x.col, x.row, x.orientation]));
+    if (key(fleetOf(this.logic.player)) === key(fleet)) return;
+    const b = this._newBoard();
+    for (const x of fleet) b.place(x.index, LENGTHS[x.index], x.col, x.row, x.orientation);
+    this.logic.player = b;
+    this._pl.side = 'player';
+    for (let i = 0; i < FLEET.length; i++) this._plSync(i);
+    this._updateUI();
+    call(this.ctx.ui, 'announce', 'Der Hafenmeister hat deine Flotte aufgestellt', 'info');
+  }
+
+  // ------------------------------------------------------------------ Online: Zeiten & Verbindung des Gegners
+  _onlinePlacementDeadline(ms, at) {
+    const o = this._onl;
+    if (!o || o.turn) return;
+    o.placeUntil = (at ?? this.clock.now()) + ms;
+    o.frozen = false;
+    this._onlinePlacementTimer();
+  }
+
+  /** Platzierungszeit anzeigen; solange noch platziert wird, ergänzt der Client bei Ablauf selbst. */
+  _onlinePlacementTimer() {
+    const o = this._onl;
+    if (!o || !o.placeUntil || o.frozen) return;
+    if (o.placeTimer != null) this.clock.clearTimeout(o.placeTimer);
+    const left = Math.max(0, o.placeUntil - this.clock.now());
+    o.placeTimer = this.clock.setTimeout(() => { o.placeTimer = null; this._onlinePlacementUp(); }, left);
+    call(this.ctx.ui, 'setTimer', { ms: Math.min(TIMES.placementMs, left), warn: this.state === 'placement' });
+  }
+
+  /** Platzierungszeit um: fehlende Schiffe zufällig ergänzen, gesetzte bleiben, und bestätigen. */
+  _onlinePlacementUp() {
+    if (this.mode !== 'online' || this.state !== 'placement') return;
+    this._plBoard().completeRandom(LENGTHS, this.rng);
+    for (let i = 0; i < FLEET.length; i++) this._plSync(i);
+    this._pl.selected = -1;
+    call(this.ctx.ui, 'announce', 'Die Zeit ist um – der Rest der Flotte läuft aus!', 'warning');
+    this._plConfirm();
+  }
+
+  /** Server hat nach Ablauf der Platzierungszeit ergänzt, bevor dieser Client bestätigt hat. */
+  _onlineForcedStart() {
+    this._plBoard().completeRandom(LENGTHS, this.rng); // wird gleich durch die Flotte des Servers ersetzt
+    this._startBattle();
+  }
+
+  _onlineTurnTimer() {
+    const o = this._onl;
+    if (!o || !o.turn) return;
+    const left = Math.max(0, o.turnUntil - this.clock.now());
+    call(this.ctx.ui, 'setTimer', { ms: Math.min(TIMES.turnMs, left), warn: o.turn === 'player', frozen: o.frozen });
+  }
+
+  /** opponentStatus: Gegner getrennt (Schonfrist, Zeiten stehen), zurück, oder nach Spielende abgelegt. */
+  _onlineStatus(msg) {
+    const { ui } = this.ctx, o = this._onl, foe = this.names.enemy;
+    if (!o) return;
+    if (msg.status === 'grace') {
+      o.frozen = true;
+      this._cancelAim();
+      if (o.placeTimer != null) { this.clock.clearTimeout(o.placeTimer); o.placeTimer = null; }
+      const until = o.turn ? o.turnUntil : o.placeUntil;
+      if (until) call(ui, 'setTimer', { ms: Math.min(o.turn ? TIMES.turnMs : TIMES.placementMs, Math.max(0, until - this.clock.now())), frozen: true });
+      call(ui, 'setConnection', { text: `${foe} hat die Verbindung verloren`, ms: msg.ms });
+    } else if (msg.status === 'back') {
+      o.frozen = false; // Restzeit kommt gleich neu (turn bzw. placementDeadline)
+      call(ui, 'setConnection', null);
+      call(ui, 'announce', `${foe} ist zurück an Bord!`, 'info');
+    } else if (msg.status === 'left') {
+      call(ui, 'announce', `${foe} hat abgelegt`, 'info');
+    }
+  }
+
+  /** Online-Fristen und -Anzeigen beenden. */
+  _clearOnline() {
+    const o = this._onl;
+    if (o && o.placeTimer != null) { this.clock.clearTimeout(o.placeTimer); o.placeTimer = null; }
+    if (o) o.placeUntil = 0;
+    call(this.ctx.ui, 'setTimer', null);
+    call(this.ctx.ui, 'setConnection', null);
+  }
+
   // ------------------------------------------------------------------ UI-Status
   _updateUI() {
     const { ui } = this.ctx;
@@ -884,6 +1092,7 @@ export class GameController {
     const { world, audio, fx, ui, boards } = this.ctx;
     const hs = this.mode === 'hotseat', online = this.mode === 'online';
     this.state = 'gameover';
+    this._clearOnline();
     if (hs) this._showShips('all');
     if (this._pauseMenu) { this._pauseMenu = false; this._paused = false; this.input.enabled = true; call(ui, 'hidePause'); }
     this._readyWaiters.splice(0).forEach((r) => r());

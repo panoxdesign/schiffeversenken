@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createGameServer } from '../server/GameServer.js';
 import { fakeClock, mulberry32 } from './support/fakeClock.mjs';
 import { memoryNet } from './support/memoryTransport.mjs';
+import { TIMES } from '../shared/rules.js';
 
 const { GameController, makeCtx, until } = await import('./support/headless.mjs');
 
@@ -15,10 +16,11 @@ function harbor(seed = 7) {
   const clock = fakeClock();
   const core = createGameServer({ clock, rng: mulberry32(seed) });
   /** Ein Spieler: Controller mit Mock-Szene, Name und Netz zum Kern. */
-  function pirate(name) {
+  function pirate(name, { ownClock } = {}) {
     const m = makeCtx();
     const net = memoryNet(core);
     m.ctx.net = net;
+    m.ctx.clock = ownClock || clock; // Online-Fristen laufen auf derselben vorspulbaren Uhr wie der Server
     m.ctx.ui.playerName = name;
     const gc = new GameController(m.ctx);
     gc.debug.setTimeScale(0);
@@ -29,8 +31,8 @@ function harbor(seed = 7) {
 }
 
 /** Gastgeber lädt ein, Gast gibt den Code ein. */
-async function invited(h, a = 'Rotbart', b = 'Einaugen-Jule') {
-  const host = h.pirate(a), guest = h.pirate(b);
+async function invited(h, a = 'Rotbart', b = 'Einaugen-Jule', guestOpts) {
+  const host = h.pirate(a), guest = h.pirate(b, guestOpts);
   host.ui.menu.onInvite();
   await until(() => shown(host, 'showLobby')?.code);
   const { code } = shown(host, 'showLobby');
@@ -222,4 +224,99 @@ test('Hauptmenü weckt den Hafen und zeigt seinen Zustand', async () => {
   gc.start(); // gleich wieder im Menü: noch frisch, kein neuer Ping
   assert.equal(pings, 1);
   assert.equal(m.ctx.ui.last.setHarbor, 'ready', 'Menü bekommt den bekannten Zustand');
+});
+
+/** Wer gerade zielen darf (oder null). */
+const aiming = (a, b) => [a, b].find((p) => p.gc.debug.status().pending) || null;
+
+test('Online: Zugzeit läuft ab -> Zufallsschuss bei beiden inszeniert, Sanduhr im HUD', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  const me = aiming(host, guest), foe = me === host ? guest : host;
+  assert.deepEqual(shown(me, 'setTimer'), { ms: TIMES.turnMs, warn: true, frozen: false }, 'eigene Sanduhr warnt');
+  assert.equal(shown(foe, 'setTimer').warn, false, 'Sanduhr des Gegners ohne Warnung');
+  h.clock.advance(TIMES.turnMs + TIMES.animMs);
+  await until(() => me.gc.stats.shots === 1 && foe.gc.statsEnemy.shots === 1);
+  assert.equal(me.gc.stats.shots, 1, 'Zufallsschuss zählt für mich');
+  assert.ok(me.ui.announced.includes('Zeit um – ein Zufallsschuss!'));
+  assert.ok(foe.ui.announced.some((t) => / zögert – ein Zufallsschuss!$/.test(t)));
+  assert.equal(me.gc.logic.enemy.shots.filter(Boolean).length, 1, 'Ergebnis im Wissens-Brett');
+});
+
+test('Online: drei verpasste Züge -> Niederlage durch Zeit', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  const lazy = aiming(host, guest), busy = lazy === host ? guest : host;
+  for (let i = 0; i < 200 && lazy.gc.state !== 'gameover'; i++) {
+    if (busy.gc.debug.status().pending) fireOnce(busy, lazy, 'miss');
+    else if (lazy.gc.debug.status().pending) h.clock.advance(TIMES.turnMs + TIMES.sunkAnimMs);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  await until(() => shown(lazy, 'showGameOver') && shown(busy, 'showGameOver'));
+  assert.equal(lazy.ui.gameOver.title, 'Eingeschlafen!');
+  assert.equal(busy.ui.gameOver.title, `${lazy.gc.debug.names.player} ist eingeschlafen – Sieg!`);
+  assert.equal(busy.ui.gameOver.won, true);
+});
+
+test('Online: Platzierungszeit um -> gesetzte Schiffe bleiben, der Rest wird ergänzt', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  host.gc._plClick({ col: 0, row: 0 }); // Galeone waagerecht oben links
+  const galeone = { ...host.gc.logic.player.ships[0] };
+  assert.equal(galeone.col, 0);
+  assert.deepEqual(shown(host, 'setTimer'), { ms: TIMES.placementMs, warn: true });
+  guest.gc.debug.autoPlace(); guest.gc.debug.confirm();
+  h.clock.advance(TIMES.placementMs);
+  await until(() => host.gc.debug.status().pending || guest.gc.debug.status().pending);
+  assert.equal(host.gc.state, 'battle');
+  assert.deepEqual([host.gc.logic.player.ships[0].col, host.gc.logic.player.ships[0].row, host.gc.logic.player.ships[0].orientation], [0, 0, galeone.orientation]);
+  assert.equal(host.gc.logic.player.ships.filter(Boolean).length, 5);
+});
+
+test('Online: Server ergänzt die Flotte eines säumigen Clients -> Client übernimmt sie', async () => {
+  const h = harbor();
+  const sleepy = fakeClock(); // Tab im Hintergrund: die eigene Frist des Gasts läuft nie ab
+  const { host, guest } = await invited(h, 'Rotbart', 'Einaugen-Jule', { ownClock: sleepy });
+  guest.gc._plClick({ col: 0, row: 0 }); // nur die Galeone gesetzt
+  host.gc.debug.autoPlace(); host.gc.debug.confirm();
+  h.clock.advance(TIMES.placementMs + TIMES.placementSlackMs);
+  await until(() => guest.gc.state === 'battle' && (host.gc.debug.status().pending || guest.gc.debug.status().pending));
+  assert.ok(!guest.ui.announced.includes('Die Zeit ist um – der Rest der Flotte läuft aus!'), 'Gast hat nicht selbst ergänzt');
+  const server = [...h.core.rooms.values()][0].seats[1].board;
+  for (let i = 0; i < 5; i++) {
+    const a = guest.gc.logic.player.ships[i], b = server.ships[i];
+    assert.deepEqual([a.col, a.row, a.orientation], [b.col, b.row, b.orientation], `Schiff ${i} wie auf dem Server`);
+  }
+  assert.ok(guest.ui.announced.includes('Der Hafenmeister hat deine Flotte aufgestellt'));
+});
+
+test('Online: Gegner getrennt -> Hinweis mit Schonfrist, Sanduhr steht, kein Zielen', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  const me = aiming(host, guest), foe = me === host ? guest : host;
+  foe.net.opened[0].close();
+  await until(() => shown(me, 'setConnection'));
+  assert.deepEqual(shown(me, 'setConnection'), { text: `${foe.gc.debug.names.player} hat die Verbindung verloren`, ms: TIMES.graceMs });
+  assert.equal(shown(me, 'setTimer').frozen, true);
+  assert.equal(me.gc.debug.status().pending, false, 'eingefroren: kein Schuss möglich');
+  h.clock.advance(TIMES.graceMs);
+  await until(() => shown(me, 'showGameOver'));
+  assert.equal(me.ui.gameOver.title, 'Der Feind ist geflohen – Sieg!');
+  assert.equal(me.ui.last.setConnection, null, 'Hinweis weg');
+});
+
+test('Online: Aufgeben im Pausenmenü', async () => {
+  const h = harbor();
+  const { host, guest } = await invited(h);
+  await toBattle(host, guest);
+  host.gc._togglePause();
+  assert.equal(typeof shown(host, 'showPause').onResign, 'function');
+  shown(host, 'showPause').onResign();
+  await until(() => shown(host, 'showGameOver') && shown(guest, 'showGameOver'));
+  assert.equal(host.ui.gameOver.won, false);
+  assert.equal(host.ui.gameOver.title, 'Flagge gestrichen');
+  assert.equal(guest.ui.gameOver.title, 'Rotbart hat die Flagge gestrichen – Sieg!');
 });

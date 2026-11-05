@@ -138,6 +138,16 @@ const SOUNDS = {
     return 0.2;
   },
 
+  /** Holzklopfen der Sanduhr (Warnphase der Zugzeit). */
+  tick(ctx, out, rev, t, v, p) {
+    const m = mix(ctx, 0.55 * v);
+    const o = osc(ctx, 'triangle', 880 * p, t, 0.08); sweep(o.frequency, t, 880 * p, 610 * p, 0.05);
+    const g = gainN(ctx, 0); ad(g, t, 0.5, 0.001, 0.05); chain(o, g, m);
+    const c = noiseSrc(ctx, 'white', t, 0.03), bp = filt(ctx, 'bandpass', 2400 * p, 3), cg = gainN(ctx, 0); ad(cg, t, 0.5, 0.0005, 0.018); chain(c, bp, cg, m);
+    finish(m, out, rev, 0.05);
+    return 0.15;
+  },
+
   hover(ctx, out, rev, t, v, p) {
     const m = mix(ctx, 0.5 * v);
     const o = osc(ctx, 'sine', 1900 * p, t, 0.08), g = gainN(ctx, 0); ad(g, t, 0.16, 0.008, 0.04); chain(o, g, m);

@@ -26,9 +26,15 @@ export function netErrorText(code) {
 
 /** Titel und Untertitel des Game-Over-Bildschirms je Grund ({} = Standardtexte). */
 export function gameOverText(reason, won, opponent) {
-  if (!won || reason === 'allSunk') return {};
+  if (reason === 'allSunk') return {};
+  if (!won) {
+    if (reason === 'resign') return { title: 'Flagge gestrichen', sub: 'Du hast aufgegeben. Ein echter Pirat kommt wieder!' };
+    if (reason === 'timeout') return { title: 'Eingeschlafen!', sub: 'Drei Züge in Folge verpasst – die Partie ist verloren.' };
+    return {};
+  }
   const sub = 'Kein Schuss mehr nötig – die Beute gehört dir, Käpt\'n!';
   if (reason === 'fled') return { title: 'Der Feind ist geflohen – Sieg!', sub };
   if (reason === 'resign') return { title: `${opponent} hat die Flagge gestrichen – Sieg!`, sub };
+  if (reason === 'timeout') return { title: `${opponent} ist eingeschlafen – Sieg!`, sub };
   return { title: 'Sieg!', sub };
 }

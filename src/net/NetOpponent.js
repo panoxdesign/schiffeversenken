@@ -1,46 +1,77 @@
-// Netz-Gegner: erfüllt die Gegner-Schnittstelle (siehe src/game/opponents/AIOpponent.js) über den Spielserver.
-// Der Server ist Schiedsrichter; das gegnerische Brett im Client ist ein reines Wissens-Brett.
+// Netz-Gegner: Gegenstück zum KI-Gegner (src/game/opponents/AIOpponent.js) über den Spielserver.
+// Der Server ist Schiedsrichter: Ergebnis und Zugrecht kommen von ihm, nicht aus lokalen Regeln. Darum liefert
+// der Netz-Gegner statt `shoot`/`nextShot` einen Strom von Kampfereignissen in Server-Reihenfolge (`nextEvent`).
 // Lokal ist der eigene Spieler immer 'player' (links), der Server-Platz (seat 0/1) wird darauf abgebildet.
 import { C2S } from '../../shared/protocol.js';
 import { NetError } from './NetClient.js';
+
+/**
+ * @typedef {object} NetEvents
+ * @property {(msg: object) => void} [onGameOver] Spielende vom Server (alle Gründe, auch allSunk)
+ * @property {() => void} [onLost] Verbindung zum Server abgerissen
+ * @property {(msg: {status: 'grace'|'back'|'left', ms?: number}) => void} [onStatus] Verbindung des Gegners
+ * @property {(ms: number, at: number) => void} [onPlacementDeadline] Restzeit der Platzierung ab Empfang `at`
+ * @property {(start: {first: 'player'|'enemy', fleet: object[]}) => void} [onStart] Kampf beginnt (auch ohne eigene Flotte,
+ *   wenn der Server nach Ablauf der Platzierungszeit ergänzt hat)
+ */
 
 export class NetOpponent {
   /**
    * @param {import('./NetClient.js').NetClient} client
    * @param {number} seat eigener Platz auf dem Server
-   * @param {{ onGameOver?: (msg: object) => void, onLost?: () => void }} [events]
-   *   onGameOver: Spielende vom Server (alle Gründe, auch allSunk); onLost: Verbindung zum Server abgerissen.
+   * @param {NetEvents} [events]
    */
-  constructor(client, seat, { onGameOver, onLost } = {}) {
+  constructor(client, seat, events = {}) {
     this.client = client;
     this.seat = seat;
-    this._off = client.onPush((msg) => { if (msg.type === 'gameOver' && onGameOver) onGameOver(msg); });
-    client.onLost = () => onLost && onLost();
+    /** start-Nachricht des Servers, sobald der Kampf begonnen hat. */
+    this.started = null;
+    this._off = client.onPush((msg) => this._push(msg, events));
+    client.onLost = () => events.onLost && events.onLost();
   }
 
+  /** Server-Platz -> lokale Seite. */
+  side(seat) { return seat === this.seat ? 'player' : 'enemy'; }
+
+  _push(msg, ev) {
+    switch (msg.type) {
+      case 'gameOver': ev.onGameOver && ev.onGameOver(msg); break;
+      case 'opponentStatus': ev.onStatus && ev.onStatus(msg); break;
+      case 'placementDeadline': ev.onPlacementDeadline && ev.onPlacementDeadline(msg.ms, msg.at); break;
+      case 'start':
+        if (this.started) break;
+        this.started = msg;
+        if (ev.onStart) ev.onStart(this._start(msg));
+        break;
+      default:
+    }
+  }
+
+  _start(msg) { return { first: this.side(msg.first), fleet: msg.fleet }; }
+
+  /** Flotte übergeben (falls der Server nicht schon begonnen hat) und auf den Start warten -> { first, fleet }. */
   async submitFleet(ships) {
-    this.client.send({ type: C2S.placeFleet, ships });
-    const { first } = await this._reply(C2S.placeFleet, (m) => m.type === 'start');
-    return { first: first === this.seat ? 'player' : 'enemy' };
-  }
-
-  async shoot(col, row) {
-    this.client.send({ type: C2S.shoot, col, row });
-    const m = await this._reply(C2S.shoot, (x) => x.type === 'shotResult' && x.shooter === this.seat);
-    return m.result === 'sunk' ? { result: 'sunk', ship: m.ship } : { result: m.result };
-  }
-
-  /** Antwort auf eine eigene Nachricht; lehnt der Server sie ab (error for=type), wird geworfen statt ewig zu warten. */
-  async _reply(type, ok) {
-    const m = await this.client.next((x) => ok(x) || (x.type === 'error' && x.for === type));
+    if (!this.started) this.client.send({ type: C2S.placeFleet, ships });
+    const m = await this.client.next((x) => x.type === 'start' || (x.type === 'error' && x.for === C2S.placeFleet));
     if (m.type === 'error') throw new NetError(m.code);
-    return m;
+    return this._start(m);
   }
 
-  async nextShot() {
-    const m = await this.client.next((x) => x.type === 'shotResult' && x.shooter !== this.seat);
-    return { col: m.col, row: m.row, result: m.result };
+  /**
+   * Nächstes Kampfereignis in Server-Reihenfolge:
+   *   { type: 'shotResult', shooter, col, row, result, ship?, auto? } · { type: 'turn', seat, ms, at } ·
+   *   { type: 'error', for: 'shoot' } (Schuss abgelehnt, z. B. weil die Zeit gerade ablief).
+   * Wirft NetError 'ended' nach Spielende bzw. 'connection' ohne Verbindung.
+   */
+  nextEvent() {
+    return this.client.next((x) => x.type === 'shotResult' || x.type === 'turn' || (x.type === 'error' && x.for === C2S.shoot));
   }
+
+  /** Eigener Schuss; das Ergebnis kommt als shotResult über nextEvent. */
+  shoot(col, row) { this.client.send({ type: C2S.shoot, col, row }); }
+
+  /** Flagge streichen; das Spielende kommt als gameOver. */
+  resign() { this.client.send({ type: C2S.resign }); }
 
   /** Raum verlassen und trennen (zählt im Kampf als Aufgabe). */
   dispose() {

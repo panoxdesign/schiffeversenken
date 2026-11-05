@@ -5,6 +5,7 @@
 //
 // Antworten, auf die jemand warten kann, landen in einem Postfach; `next(match)` entnimmt die erste passende
 // (oder wartet auf sie). Übrige Nachrichten gehen an `onPush`-Abonnenten.
+// Jede Nachricht bekommt beim Empfang `at` (Zeitpunkt nach `now`), damit Restzeiten (ms) ab Empfang zählen.
 import { C2S, PROTOCOL_VERSION } from '../../shared/protocol.js';
 
 /** Netz-Fehler; code: ein Fehlercode des Servers (ERROR_CODES), 'connection' oder 'ended'. */
@@ -16,18 +17,22 @@ export class NetError extends Error {
   }
 }
 
-const QUEUED = new Set(['welcome', 'roomCreated', 'matched', 'start', 'shotResult', 'error']);
+const QUEUED = new Set(['welcome', 'roomCreated', 'matched', 'start', 'shotResult', 'turn', 'state', 'error']);
 const MAX_INBOX = 64;
 
 export class NetClient {
-  constructor(transport) {
+  /** @param {{ now?: () => number }} [opts] Uhr für den Empfangszeitpunkt (Standard: Date.now). */
+  constructor(transport, { now = () => Date.now() } = {}) {
     this.transport = transport;
+    this.now = now;
     this.closed = false;
     /** Spielende vom Server (gameOver); danach warten keine neuen Spielnachrichten mehr. */
     this.ended = null;
     this._inbox = [];
     this._waiters = [];
     this._push = new Set();
+    /** Letzte Nachricht je Typ (z. B. placementDeadline, die vor dem Abonnieren ankam). */
+    this.latest = {};
     /** Wird gerufen, wenn die Verbindung unerwartet abreißt (nicht nach close()). */
     this.onLost = null;
     transport.onMessage((msg) => this._receive(msg));
@@ -48,9 +53,9 @@ export class NetClient {
     return new Promise((resolve, reject) => this._waiters.push({ match, resolve, reject }));
   }
 
-  /** Begrüßung -> welcome { token, name, players }. */
-  async hello(name) {
-    this.send({ type: C2S.hello, version: PROTOCOL_VERSION, name: typeof name === 'string' ? name : '' });
+  /** Begrüßung -> welcome { token, name, players, resumed? }. Mit token: zurück in die laufende Partie (dann folgt `state`). */
+  async hello(name, token) {
+    this.send({ type: C2S.hello, version: PROTOCOL_VERSION, name: typeof name === 'string' ? name : '', ...(token && { token }) });
     return this._expect((m) => m.type === 'welcome', (m) => m.type === 'error' && !m.for);
   }
 
@@ -88,6 +93,8 @@ export class NetClient {
 
   _receive(msg) {
     if (this.closed || !msg || typeof msg.type !== 'string') return;
+    msg.at = this.now();
+    this.latest[msg.type] = msg;
     for (const fn of [...this._push]) {
       try { fn(msg); } catch (e) { console.warn('[net] Fehler im Abonnenten', e); }
     }

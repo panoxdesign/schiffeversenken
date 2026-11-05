@@ -85,3 +85,9 @@ export const link = (cls = '') => svg('0 0 100 100', `<g fill="none" stroke="cur
 export const share = (cls = '') => svg('0 0 100 100', `<g fill="currentColor"><circle cx="74" cy="22" r="12"/><circle cx="26" cy="50" r="12"/><circle cx="74" cy="78" r="12"/></g><g stroke="currentColor" stroke-width="7"><line x1="64" y1="28" x2="36" y2="44"/><line x1="36" y1="56" x2="64" y2="72"/></g>`, cls);
 /** Schlüssel (Code eingeben). */
 export const key = (cls = '') => svg('0 0 100 100', `<g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><circle cx="30" cy="50" r="16"/><path d="M46 50h44M78 50v14M66 50v10"/></g>`, cls);
+
+/** Sanduhr. */
+export const hourglass = (cls = '') => svg('0 0 100 100', `<g stroke="#2b1a0a" stroke-width="4" stroke-linejoin="round">
+<rect x="20" y="6" width="60" height="10" rx="4" fill="url(#fb-wood)"/><rect x="20" y="84" width="60" height="10" rx="4" fill="url(#fb-wood)"/>
+<path d="M28 16h44c0 18-14 26-18 34 4 8 18 16 18 34H28c0-18 14-26 18-34-4-8-18-16-18-34z" fill="rgba(255,240,200,.25)"/></g>
+<path class="sand" d="M36 26h28c-3 8-10 13-14 19-4-6-11-11-14-19zM50 54c3 9 16 16 17 26H33c1-10 14-17 17-26z" fill="#e9bf5c"/>`, cls);
