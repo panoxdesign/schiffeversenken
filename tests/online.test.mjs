@@ -153,7 +153,7 @@ test('Online: Gegner verlässt die Partie im Kampf -> Sieg mit Grund', async () 
     const { host, guest } = await invited(h);
     await toBattle(host, guest);
     if (how === 'menu') guest.gc.start();
-    else guest.net.opened[0].close(); // Verbindung weg, ohne „leave“
+    else { guest.net.opened[0].close(); setTimeout(() => h.clock.advance(60_000), 5); } // Verbindung weg, ohne „leave“; Schonfrist läuft ab
     await until(() => shown(host, 'showGameOver'));
     assert.equal(host.gc.state, 'gameover');
     assert.equal(host.ui.gameOver.won, true);

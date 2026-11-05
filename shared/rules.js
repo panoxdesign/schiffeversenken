@@ -18,3 +18,21 @@ export const RULES = {
   /** Bei Treffer darf erneut geschossen werden. */
   shootAgainOnHit: true,
 };
+
+/** Online-Zeiten in ms (spec/multiplayer.md, „Zeiten & Grenzwerte“). */
+export const TIMES = Object.freeze({
+  /** Zugzeit pro Schuss. */
+  turnMs: 45_000,
+  /** Puffer für die Schussanimation, bevor die Zugzeit läuft (bei „versenkt“ länger). */
+  animMs: 3_000,
+  sunkAnimMs: 5_000,
+  /** Verpasste Züge in Folge bis zur Niederlage. */
+  maxMissed: 3,
+  /** Platzierungszeit; der Server randomisiert erst nach der Nachfrist hart. */
+  placementMs: 120_000,
+  placementSlackMs: 10_000,
+  /** Schonfrist nach Verbindungsabbruch. */
+  graceMs: 60_000,
+  /** Warnphase der Sanduhr. */
+  warnMs: 10_000,
+});

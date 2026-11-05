@@ -155,9 +155,32 @@ export class GameServer {
       s.send({ type: S2C.error, code: 'version' });
       return this._close(s);
     }
+    const back = msg.token ? this._seatByToken(msg.token) : null;
+    if (back) return this._rejoin(s, msg.token, back);
     s.name = sanitizeName(msg.name) || randomPirateName(this.rng);
     s.token = this._randomString(TOKEN_ALPHABET, TOKEN_LENGTH);
     s.send({ type: S2C.welcome, token: s.token, name: s.name, players: this.playerCount() });
+  }
+
+  /**
+   * Wiederverbinden mit dem Token einer laufenden Partie: welcome (resumed) und danach `state`.
+   * Hängt der Platz noch an einer alten Verbindung (Server hat den Abbruch noch nicht bemerkt), wird sie getrennt.
+   */
+  _rejoin(s, token, { room, seat }) {
+    const old = room.detach(seat);
+    if (old) this._close(old);
+    s.name = room.seats[seat].name;
+    s.token = token;
+    s.send({ type: S2C.welcome, token, name: s.name, players: this.playerCount(), resumed: true });
+    room.resume(seat, s);
+  }
+
+  _seatByToken(token) {
+    for (const room of this.rooms.values()) {
+      const seat = room.seatOfToken(token);
+      if (seat >= 0) return { room, seat };
+    }
+    return null;
   }
 
   // --- Lobby
