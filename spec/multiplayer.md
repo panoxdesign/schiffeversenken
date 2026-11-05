@@ -278,7 +278,7 @@ Jeder Platz (Seat) hat den Verbindungszustand `connected → grace (60 s) → go
 
 ### Umsetzungs-Etappen
 
-Jede Etappe ist für sich lauffähig, wird committet und lässt das Spiel nie kaputt. Arbeit auf Branch `feature/multiplayer`. Deployment wird **nach Etappe 4** vorgezogen, damit früh echte Online-Tests möglich sind.
+Jede Etappe ist für sich lauffähig, wird committet und lässt das Spiel nie kaputt. Arbeit auf Branch `feature/multiplayer`; live läuft `main` (Vercel und Render). Nach jeder fertigen Etappe wird `main` per Fast-Forward nachgezogen und gepusht, das schaltet sie live. Deployment wird **nach Etappe 4** vorgezogen, damit früh echte Online-Tests möglich sind.
 
 | # | Etappe | Inhalt | Fertig, wenn |
 |---|---|---|---|
@@ -287,7 +287,7 @@ Jede Etappe ist für sich lauffähig, wird committet und lässt das Spiel nie ka
 | 3 | Server-Kern | Lobby (Codes), Match, Protokoll, Validierung, injizierte Uhr/Zufall, Adapter `ws` | Protokoll-Tests mit zwei simulierten Clients grün, Server lokal startbar |
 | 4 | Online mit Freunden | Netz-Gegner, Transport, Einladen/Code/Link/Teilen, Vite-Proxy | Zwei Browser lokal spielen eine Partie per Code und per Link; E2E-In-Memory-Test grün |
 | 4a | Deployment (vorgezogen) | Render-Konfiguration, Client-Umgebungsvariable, Vercel, Weck-Ping, Origins | Partie über das Internet zwischen zwei Geräten |
-| 5 | Robustheit | Wiederverbinden + Schonfrist + `state`, Zugzeit + Sanduhr, Platzierungszeit, Aufgeben, Versionsprüfung, Limits, Heartbeat | Abbruch-, Timeout- und Limit-Tests grün; Handy-Bildschirm-aus-Test manuell ok |
+| 5 | Robustheit | Wiederverbinden + Schonfrist + `state`, Zugzeit + Sanduhr, Platzierungszeit, Aufgeben, Versionsprüfung, Limits, Heartbeat | Abbruch-, Timeout- und Limit-Tests grün; Handy-Bildschirm-aus-Test manuell ok; Partie zwischen zwei Geräten in getrennten Netzen (aus 4a) |
 | 6 | Zufallsgegner & Extras | Warteschlange, Spielerzähler, KI-Angebot, Revanche, Spielstand, „Neuer Gegner“, Emotes | Alle User Stories erfüllt |
 | 7 | Doku | Architektur-Doku (Modul Netzwerk, Protokoll, Regel three/ws), README (Start lokal, Deployment) | Doku entspricht dem Code |
 
@@ -297,7 +297,7 @@ Fortschritt hier abhaken:
 - [x] Etappe 2 – Hot-Seat
 - [x] Etappe 3 – Server-Kern
 - [x] Etappe 4 – Online mit Freunden
-- [ ] Etappe 4a – Deployment
+- [x] Etappe 4a – Deployment (2026-11-05 getestet mit zwei Browserfenstern über Vercel/Render; Test mit zwei Geräten in getrennten Netzen, z. B. Handy im Mobilfunk, holt Etappe 5 nach)
 - [ ] Etappe 5 – Robustheit
 - [ ] Etappe 6 – Zufallsgegner & Extras
 - [ ] Etappe 7 – Doku
@@ -307,8 +307,8 @@ Fortschritt hier abhaken:
 - **Platzierung auf dem rechten Brett (Hot-Seat P2):** Ghost-Vorschau und Eingabe sind bisher nur für das linke Brett genutzt; prüfen, ob die Brett-Ansicht das rechts ohne Änderungen kann.
 - **Schadensdarstellung:** Schiffsschaden wird bisher nur auf der Spielerseite visuell angewendet; im Hot-Seat muss das für beide Seiten gelten.
 - **Kameraperspektive Spieler 2:** Die vorhandenen Ansichten blicken von der Spielerseite; prüfen, ob die Ansicht auf das eigene rechte Brett für Spieler 2 gut lesbar ist, ggf. eigene Pose ergänzen.
-- **Render Free:** Free-Tier-Bedingungen (Einschlafen nach ca. 15 min, Startzeit) vor dem Deployment auf der aktuellen Preisseite gegenprüfen.
-- **Etappe 4a – Vorarbeit aus Etappe 4:** Der Client liest `VITE_SERVER_URL` bereits (`serverWsUrl` in `src/net/link.js`, verdrahtet in `src/main.js`). Im Dev startet `server/devPlugin.js` den Spielserver im Vite-Prozess (nur 127.0.0.1), der Proxy leitet `/ws` und `/health` weiter. Repo: https://github.com/panoxdesign/schiffeversenken (Push aus dem Sandbox funktioniert). Render und Vercel richtet der Nutzer selbst ein.
+- **Render Free (geprüft 2026-11-01, render.com/docs/free):** Einschlafen nach 15 min ohne eingehenden Verkehr (WebSocket-Nachrichten zählen), Aufwachen ca. 1 min, 750 Free-Stunden/Monat pro Workspace. Render kann Free-Dienste jederzeit neu starten, laufende Partien brechen dann ab (→ Wiederverbinden in Etappe 5).
+- **Etappe 4a – Vorarbeit aus Etappe 4:** Der Client liest `VITE_SERVER_URL` bereits (`serverWsUrl` in `src/net/link.js`, verdrahtet in `src/main.js`). Im Dev startet `server/devPlugin.js` den Spielserver im Vite-Prozess (nur 127.0.0.1), der Proxy leitet `/ws` und `/health` weiter. Repo: https://github.com/panoxdesign/schiffeversenken (Push aus dem Sandbox funktioniert). Render und Vercel richtet der Nutzer selbst ein. **Live seit 2026-11-05:** Client https://schiffeversenken-two.vercel.app, Server https://freibeuter-hafen.onrender.com (Frankfurt), beide auf Branch `main`; `ALLOWED_ORIGINS` auf Render = Client-Adresse.
 - **Etappe 5 – Client muss dem Server folgen:** Gegnerische Schüsse auf die eigene Flotte wertet der Client weiterhin selbst aus (`logic.player.receiveShot`). Das `result` aus `shotResult` und die `turn`-Nachrichten werden ignoriert, das Zugrecht ergibt sich aus den lokalen Regeln. Das passt nur, solange Client- und Server-Flotte gleich sind. Spätestens beim harten Randomisieren nach der Platzierungszeit und bei Zug-Timeouts muss der Client Ergebnis und Zugrecht vom Server übernehmen.
 - **Etappe 5 – schon vorhanden:** Rückfrage vor Aufgabe über „Hauptmenü“ in der Online-Pause, Meldungen für `version` (mit Neu-laden-Knopf), `full` und Verbindungsverlust (`src/game/onlineTexts.js`). Es fehlt noch der eigene „Aufgeben“-Knopf.
 - **Etappe 7 – Doku:** `ARCHITECTURE.md` kennt die neuen Schnittstellen noch nicht: `ui.showLobby`/`hideLobby`, `showMainMenu({ onInvite, onJoin, page })`, `showHUD({ foe })`, `showPause({ online })`, `showGameOver({ title, sub, reason, onRestart: null })`, `ctx.net`, Modul `src/net/`.

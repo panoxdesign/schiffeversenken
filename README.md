@@ -25,22 +25,23 @@ Der Client ist statisch und läuft auf **Vercel**, der Spielserver („Hafen“)
 **1. Spielserver auf Render**
 - In Render „New → Blueprint“ wählen und das Repo verbinden. `render.yaml` legt den Dienst `freibeuter-hafen` an
   (Build `npm ci --omit=dev`, Start `npm run server`, Health-Check `/health`).
-- Den Branch wählen, der laufen soll (z. B. `main`).
+- Branch `main` wählen (live läuft `main`, entwickelt wird auf Feature-Branches). Die Region steht in `render.yaml`
+  auf Frankfurt und lässt sich nach dem Anlegen nicht mehr ändern.
 - Umgebungsvariable `ALLOWED_ORIGINS` = Adresse des Clients, z. B. `https://schiffeversenken.vercel.app`.
   Mehrere Adressen kommagetrennt. Ohne Eintrag nimmt der Server nur `localhost` an. Fehlt die Client-Adresse hier,
   blockiert der Browser den Weck-Ping, und das Menü zeigt „Hafen nicht erreichbar“, obwohl der Server läuft.
 - Die Server-Adresse notieren, z. B. `https://freibeuter-hafen.onrender.com`. `…/health` muss `{"ok":true,…}` liefern.
 
 **2. Client auf Vercel**
-- Projekt aus dem Repo anlegen (Vite wird erkannt, siehe `vercel.json`).
+- Projekt aus dem Repo anlegen (Vite wird erkannt, siehe `vercel.json`). Production Branch bleibt `main`.
 - Umgebungsvariable `VITE_SERVER_URL` = Server-Adresse aus Schritt 1 (ohne `/ws`). Sie wird beim Build eingebaut,
   nach einer Änderung also neu deployen.
 - Die endgültige Client-Adresse muss in `ALLOWED_ORIGINS` auf Render stehen. Vorschau-Deployments haben eigene
   Adressen und werden sonst abgewiesen.
 
 **Hinweise**
-- Ein Free-Server auf Render schläft nach einer Weile ohne Verkehr ein und braucht beim ersten Aufruf einige Sekunden
-  bis etwa eine Minute. Das Hauptmenü pingt ihn darum schon beim Öffnen und zeigt „Hafen erwacht …“ bzw.
+- Ein Free-Server auf Render schläft nach 15 Minuten ohne Verkehr ein und braucht beim ersten Aufruf bis etwa eine
+  Minute. Render kann Free-Dienste jederzeit neu starten, laufende Partien brechen dann ab. Das Hauptmenü pingt ihn darum schon beim Öffnen und zeigt „Hafen erwacht …“ bzw.
   „Hafen nicht erreichbar“.
 - KI und Hot-Seat brauchen keinen Server und funktionieren auch offline.
 
